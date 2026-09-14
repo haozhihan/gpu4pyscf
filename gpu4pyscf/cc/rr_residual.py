@@ -221,6 +221,61 @@ class RRCCSDDoublesResult:
 
 
 @dataclass(frozen=True)
+class RRCCSDDoublesComponents:
+    """Unassembled projected doubles terms and their shared intermediates.
+
+    The complete RR driver normally assembles these terms from a zero core.
+    A hybrid residual can instead start from ``-R_123`` and add every term
+    directly.  That produces the complement without first materializing an
+    independently assembled complete-RR numerator.
+    """
+
+    terms: tuple[RRResidualTermResult, ...]
+    fock_intermediates: CCFockIntermediates
+    lagrangian_one_body: "CCLagrangianOneBody"
+    materialized_dense_t2: bool = False
+    materialized_four_index_eri: bool = False
+
+    @property
+    def term_metadata(self) -> tuple[dict[str, Any], ...]:
+        return tuple(term.metadata() for term in self.terms)
+
+    def assemble_core(self, *, initial_core: Any = None):
+        """Accumulate the terms, optionally from a caller-supplied offset."""
+
+        if not self.terms:
+            raise ValueError("at least one doubles residual term is required")
+        reference = self.terms[0].core
+        xp = _array_module(reference)
+        if initial_core is None:
+            core = xp.zeros_like(reference)
+        else:
+            if not _same_backend(reference, initial_core):
+                raise TypeError("doubles terms and initial core need one backend")
+            if getattr(initial_core, "shape", None) != reference.shape:
+                raise ValueError("initial core shape does not match doubles terms")
+            if not np.issubdtype(np.dtype(initial_core.dtype), np.floating):
+                raise TypeError("initial core must be floating point")
+            core = xp.array(initial_core, copy=True)
+        for term in self.terms:
+            core += term.core
+        return core
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "equation": "Hirata-2004-restricted-CCSD-doubles-projected",
+            "fock_intermediates": self.fock_intermediates.metadata(),
+            "lagrangian_one_body": self.lagrangian_one_body.metadata(),
+            "terms": list(self.term_metadata),
+            "assembled_complete_core": False,
+            "materialized_dense_t2": bool(self.materialized_dense_t2),
+            "materialized_four_index_eri": bool(
+                self.materialized_four_index_eri
+            ),
+        }
+
+
+@dataclass(frozen=True)
 class CCLagrangianOneBody:
     """Restricted-CC ``L_oo`` and ``L_vv`` intermediates."""
 
@@ -2125,7 +2180,7 @@ def projected_cc_ring_gemm(
     )
 
 
-def build_projected_ccsd_doubles_numerator(
+def build_projected_ccsd_doubles_components(
     doubles: RRDoubles,
     t1: Any,
     fock_oo: Any,
@@ -2142,13 +2197,13 @@ def build_projected_ccsd_doubles_numerator(
     virtual_block_size: int = 8,
     ring_kernel: str = "reference",
     transfer_counter: Any = None,
-) -> RRCCSDDoublesResult:
-    """Build every real-RHF RCCSD doubles-numerator term in RR/CD form.
+) -> RRCCSDDoublesComponents:
+    """Build every real-RHF RCCSD doubles term without assembling its core.
 
-    This combines the exact factorized terms above in the same order and with
-    the same coefficients as PySCF ``rccsd.update_amps``.  ``ring_kernel`` is
-    an explicit selector so the bounded-memory reference remains the default;
-    ``"gemm"`` opts into the numerically equivalent tiled GEMM path.
+    Keeping the six coarse equation groups separate lets the ordinary RR
+    path sum from zero while a hybrid path sums from a signed ``R_123``
+    offset.  ``ring_kernel`` remains an explicit selector so the bounded
+    reference is the default and ``"gemm"`` opts into the tiled GEMM path.
     """
 
     vectors = doubles.projector.vectors
@@ -2247,14 +2302,55 @@ def build_projected_ccsd_doubles_numerator(
             virtual_block_size=vblock,
         ),
     )
-    core = xp.zeros_like(terms[0].core)
-    for term in terms:
-        core += term.core
-    return RRCCSDDoublesResult(
-        core=core,
+    return RRCCSDDoublesComponents(
+        terms=terms,
         fock_intermediates=f_intermediates,
         lagrangian_one_body=lagrangian,
-        term_metadata=tuple(term.metadata() for term in terms),
+    )
+
+
+def build_projected_ccsd_doubles_numerator(
+    doubles: RRDoubles,
+    t1: Any,
+    fock_oo: Any,
+    fock_ov: Any,
+    fock_vv: Any,
+    occupied_energies: Any,
+    virtual_energies: Any,
+    loo: Any,
+    lov: Any,
+    lvv: Any,
+    *,
+    level_shift: float = 0.0,
+    auxiliary_block_size: int = 1,
+    virtual_block_size: int = 8,
+    ring_kernel: str = "reference",
+    transfer_counter: Any = None,
+) -> RRCCSDDoublesResult:
+    """Build every real-RHF RCCSD doubles-numerator term in RR/CD form."""
+
+    components = build_projected_ccsd_doubles_components(
+        doubles,
+        t1,
+        fock_oo,
+        fock_ov,
+        fock_vv,
+        occupied_energies,
+        virtual_energies,
+        loo,
+        lov,
+        lvv,
+        level_shift=level_shift,
+        auxiliary_block_size=auxiliary_block_size,
+        virtual_block_size=virtual_block_size,
+        ring_kernel=ring_kernel,
+        transfer_counter=transfer_counter,
+    )
+    return RRCCSDDoublesResult(
+        core=components.assemble_core(),
+        fock_intermediates=components.fock_intermediates,
+        lagrangian_one_body=components.lagrangian_one_body,
+        term_metadata=components.term_metadata,
     )
 
 
@@ -2265,11 +2361,13 @@ __all__ = [
     "RRCCSDEnergyResult",
     "RRCCSDSinglesResult",
     "RRCCSDDoublesResult",
+    "RRCCSDDoublesComponents",
     "CCLagrangianOneBody",
     "ProjectedPairDenominator",
     "build_cc_fock_intermediates",
     "rr_ccsd_energy",
     "build_ccsd_singles_numerator",
+    "build_projected_ccsd_doubles_components",
     "build_projected_ccsd_doubles_numerator",
     "build_cc_lagrangian_one_body",
     "projected_bare_ovov",

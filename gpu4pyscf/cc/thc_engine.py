@@ -50,6 +50,7 @@ from gpu4pyscf.cc.rr_engine import (
 from gpu4pyscf.cc.rr_residual import (
     ProjectedPairDenominator,
     build_ccsd_singles_numerator,
+    build_projected_ccsd_doubles_components,
     build_projected_ccsd_doubles_numerator,
     rr_ccsd_energy,
 )
@@ -57,8 +58,12 @@ from gpu4pyscf.cc.thc_factorization import THCProjectorFactors
 from gpu4pyscf.cc.thc_residual import (
     PairFactorResidual123Result,
     THCResidual123Result,
+    _pair_factor_algorithms_1_3_block,
     rr_residual_algorithms_1_3,
-    thc_residual_algorithms_1_3,
+    thc_algorithm_1,
+    thc_algorithm_2,
+    thc_algorithm_3,
+    transform_cholesky_t1,
 )
 
 
@@ -86,11 +91,11 @@ class RRResidual123Decomposition:
     retained by this object, so the replacement formula cannot double count
     ``R_123``.
 
-    The current proof implementation obtains the complement by evaluating
-    the complete RR equation and the exact arbitrary-pair ``R_123`` against
-    the same Cholesky tensors.  That establishes a safe equation boundary but
-    does not yet remove the duplicated contractions, so it remains
-    performance ineligible.
+    The legacy oracle evaluates the complete RR equation separately.  The
+    production constructor instead accumulates the same coarse terms from a
+    signed ``-R_123`` offset and can share each transformed Cholesky block
+    between the exact-RR and THC ``R_123`` evaluations.  The fields below
+    preserve that distinction in machine-readable metadata.
     """
 
     complement_core: Any
@@ -99,6 +104,11 @@ class RRResidual123Decomposition:
     lagrangian_one_body: Any
     complete_term_metadata: tuple[dict[str, Any], ...]
     complete_rr_metadata: dict[str, Any]
+    construction: str = "complete-minus-exact-r123-oracle"
+    fused_contraction_implementation: bool = False
+    complete_rr_evaluated_separately: bool = True
+    r123_application_count: int = 1
+    shared_transformed_cholesky_block_count: int = 0
     materialized_dense_t2: bool = False
     materialized_four_index_eri: bool = False
 
@@ -157,7 +167,7 @@ class RRResidual123Decomposition:
     def metadata(self) -> dict[str, Any]:
         return {
             "equation_identity": "complete_rr = exact_r123 + complement",
-            "construction": "shared-cholesky-input-r123-complement-split",
+            "construction": self.construction,
             "paper": "Hohenstein-2022",
             "paper_equations": [28, 29, 31],
             "paper_algorithms": [1, 2, 3],
@@ -169,7 +179,22 @@ class RRResidual123Decomposition:
             "materialized_four_index_eri": bool(
                 self.materialized_four_index_eri
             ),
-            "fused_contraction_implementation": False,
+            "fused_contraction_implementation": bool(
+                self.fused_contraction_implementation
+            ),
+            "fused_contraction_scope": (
+                "exact-and-thc-r123-share-t1-transformed-cholesky-blocks"
+                if self.fused_contraction_implementation
+                else None
+            ),
+            "complete_rr_evaluated_separately": bool(
+                self.complete_rr_evaluated_separately
+            ),
+            "r123_application_count": int(self.r123_application_count),
+            "shared_transformed_cholesky_block_count": int(
+                self.shared_transformed_cholesky_block_count
+            ),
+            "coarse_r123_diagram_partition_fused": False,
             "performance_eligible": False,
         }
 
@@ -191,12 +216,11 @@ def build_shared_cholesky_r123_decomposition(
     virtual_block_size: int = 8,
     transfer_counter: Any = None,
 ) -> RRResidual123Decomposition:
-    """Evaluate and expose the exact ``R_123``/complement identity.
+    """Small-system oracle for the exact ``R_123``/complement identity.
 
-    Both sides consume the same RR state and Cholesky blocks.  The returned
-    split is the sole input to the THC replacement seam, making the intended
-    diagram ownership explicit even before the contractions are fused for
-    performance.
+    This intentionally retains the original complete-minus-exact evaluation
+    order.  The production hybrid path uses the fused constructor below; this
+    routine remains independent so small systems can audit its equation split.
     """
 
     complete = build_projected_ccsd_doubles_numerator(
@@ -231,6 +255,10 @@ def build_shared_cholesky_r123_decomposition(
         lagrangian_one_body=complete.lagrangian_one_body,
         complete_term_metadata=complete.term_metadata,
         complete_rr_metadata=complete.metadata(),
+        construction="complete-minus-exact-r123-oracle",
+        fused_contraction_implementation=False,
+        complete_rr_evaluated_separately=True,
+        r123_application_count=1,
     )
 
 
@@ -253,6 +281,7 @@ class THCHybridDoublesResult:
     replacement_applied: bool = True
     materialized_dense_t2: bool = False
     materialized_four_index_eri: bool = False
+    fused_r123_construction: Optional["FusedR123Construction"] = None
 
     def solve(
         self,
@@ -285,15 +314,29 @@ class THCHybridDoublesResult:
 
     @property
     def term_metadata(self) -> tuple[dict[str, Any], ...]:
-        return self.decomposition.complete_term_metadata + ({
-            "term": "amplitude-thc-algorithms-1-3-replacement",
-            "formula": "rr_complement + thc_backprojection_1_3",
-            "paper_equations": [28, 29, 31],
-            "paper_algorithms": [1, 2, 3],
-            "replacement_applied": True,
-            "materialized_dense_t2": False,
-            "materialized_four_index_eri": False,
-        },)
+        return self.decomposition.complete_term_metadata + (
+            {
+                "term": "exact-r123-subtraction",
+                "coefficient": -1,
+                "paper_equations": [28, 29, 31],
+                "paper_algorithms": [1, 2, 3],
+                "application_count": 1,
+                "coordinate_space": "rr-core",
+                "materialized_dense_t2": False,
+                "materialized_four_index_eri": False,
+            },
+            {
+                "term": "amplitude-thc-algorithms-1-3-replacement",
+                "coefficient": 1,
+                "formula": "rr_complement + thc_backprojection_1_3",
+                "paper_equations": [28, 29, 31],
+                "paper_algorithms": [1, 2, 3],
+                "application_count": 1,
+                "replacement_applied": True,
+                "materialized_dense_t2": False,
+                "materialized_four_index_eri": False,
+            },
+        )
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -304,6 +347,7 @@ class THCHybridDoublesResult:
                 "rr_complement + backproject(thc_algorithms_1_3)"
             ),
             "replacement_applied": bool(self.replacement_applied),
+            "r123_application_count": int(self.replacement_applied),
             "replacement_validated": bool(self.replacement_validated),
             "replacement_delta_norm": float(self.replacement_delta_norm),
             "replacement_reference_norm": float(
@@ -326,6 +370,17 @@ class THCHybridDoublesResult:
             ),
             "inexact_thc_enabled": False,
             "rr_r123_decomposition": self.decomposition.metadata(),
+            "fused_r123_construction": (
+                None
+                if self.fused_r123_construction is None
+                else self.fused_r123_construction.metadata()
+            ),
+            "fused_contraction_implementation": bool(
+                self.decomposition.fused_contraction_implementation
+            ),
+            "complete_rr_evaluated_separately": bool(
+                self.decomposition.complete_rr_evaluated_separately
+            ),
             "rr_complete": dict(self.decomposition.complete_rr_metadata),
             "rr_algorithms_1_3_reference": self.rr_reference_1_3.metadata(),
             "thc_algorithms_1_3_endpoint": self.thc_approximation_1_3.metadata(),
@@ -379,6 +434,235 @@ def _validate_factor_lifecycle(
             "and water4 residual and accuracy gates pass; use the analytic "
             "full-pair endpoint for validation"
         )
+
+
+@dataclass(frozen=True)
+class FusedR123Construction:
+    """Exact-RR and THC ``R_123`` values from one transformed-CD stream."""
+
+    exact_rr: PairFactorResidual123Result
+    thc: THCResidual123Result
+    transformed_cholesky_block_count: int
+    transformed_cholesky_application_count: int
+    fused_contraction_implementation: bool = True
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "fused_contraction_implementation": bool(
+                self.fused_contraction_implementation
+            ),
+            "fused_contraction_scope": (
+                "exact-and-thc-r123-share-t1-transformed-cholesky-blocks"
+            ),
+            "transformed_cholesky_block_count": int(
+                self.transformed_cholesky_block_count
+            ),
+            "transformed_cholesky_application_count": int(
+                self.transformed_cholesky_application_count
+            ),
+            "r123_evaluation_count": 2,
+            "r123_evaluation_spaces": ["rr-core", "thc-core"],
+            "coarse_r123_diagram_partition_fused": False,
+            "performance_eligible": False,
+        }
+
+
+def build_fused_r123_construction(
+    doubles: RRDoubles,
+    factors: THCProjectorFactors,
+    t1: Any,
+    loo: Any,
+    lov: Any,
+    lvv: Any,
+    *,
+    auxiliary_block_size: int = 1,
+) -> FusedR123Construction:
+    """Evaluate exact-RR and THC Algorithms 1--3 in one CD-block loop.
+
+    Each raw ``loo/lov/lvv`` slice is transformed exactly once and the
+    resulting ``Hoo/Hov/Hvv/Hvo`` block feeds both coordinate-space kernels.
+    The pair and THC contractions remain separate because their algebra and
+    ranks differ; the shared transform and block lifetime are the fused unit.
+    """
+
+    _validate_factor_lifecycle(doubles, factors, loo, lov, lvv)
+    if t1.shape != (doubles.nocc, doubles.nvir):
+        raise ValueError("t1 shape does not match RR doubles")
+    if not _same_backend(
+        doubles.projector.vectors,
+        doubles.core,
+        factors.y_occ,
+        factors.y_vir,
+        t1,
+        loo,
+        lov,
+        lvv,
+    ):
+        raise TypeError("fused R123 inputs need one array backend")
+    naux = int(lov.shape[0])
+    block_size = int(auxiliary_block_size)
+    if block_size < 1:
+        raise ValueError("auxiliary_block_size must be positive")
+    xp = _array_module(doubles.core)
+    rr_dtype = xp.result_type(
+        doubles.projector.vectors, doubles.core, t1, loo, lov, lvv
+    )
+    thc_core = factors.amplitude_core(doubles.core)
+    thc_dtype = xp.result_type(
+        factors.y_occ, factors.y_vir, thc_core, t1, loo, lov, lvv
+    )
+    rr1 = xp.zeros((doubles.rank, doubles.rank), dtype=rr_dtype)
+    rr2 = xp.zeros_like(rr1)
+    rr3 = xp.zeros_like(rr1)
+    thc1 = xp.zeros((factors.thc_rank, factors.thc_rank), dtype=thc_dtype)
+    thc2 = xp.zeros_like(thc1)
+    thc3 = xp.zeros_like(thc1)
+    rr_largest = 0
+    thc_largest = 0
+    block_count = 0
+    for start in range(0, naux, block_size):
+        stop = min(start + block_size, naux)
+        transformed = transform_cholesky_t1(
+            t1, loo[start:stop], lov[start:stop], lvv[start:stop]
+        )
+        part_rr1, part_rr2, part_rr3, part_rr_largest = (
+            _pair_factor_algorithms_1_3_block(
+                doubles.projector.vectors,
+                doubles.core,
+                transformed,
+                doubles.nocc,
+                doubles.nvir,
+            )
+        )
+        part_thc1 = thc_algorithm_1(
+            factors.y_occ, factors.y_vir, thc_core, transformed
+        )
+        part_thc2 = thc_algorithm_2(
+            factors.y_occ, factors.y_vir, thc_core, transformed
+        )
+        part_thc3 = thc_algorithm_3(
+            factors.y_occ, factors.y_vir, thc_core, transformed
+        )
+        rr1 += part_rr1
+        rr2 += part_rr2
+        rr3 += part_rr3
+        thc1 += part_thc1
+        thc2 += part_thc2
+        thc3 += part_thc3
+        rr_largest = max(
+            rr_largest,
+            transformed.storage_nbytes,
+            int(part_rr_largest),
+        )
+        thc_largest = max(
+            thc_largest,
+            transformed.storage_nbytes,
+            int(part_thc1.nbytes),
+            int(part_thc2.nbytes),
+            int(part_thc3.nbytes),
+        )
+        block_count += 1
+    exact = PairFactorResidual123Result(
+        sigma_pair=rr1 + rr2 + rr3,
+        algorithm_1=rr1,
+        algorithm_2=rr2,
+        algorithm_3=rr3,
+        nocc=doubles.nocc,
+        nvir=doubles.nvir,
+        auxiliary_block_size=block_size,
+        largest_intermediate_nbytes=rr_largest,
+    )
+    approximation = THCResidual123Result(
+        sigma_thc=thc1 + thc2 + thc3,
+        algorithm_1=thc1,
+        algorithm_2=thc2,
+        algorithm_3=thc3,
+        auxiliary_block_size=block_size,
+        largest_intermediate_nbytes=thc_largest,
+    )
+    return FusedR123Construction(
+        exact_rr=exact,
+        thc=approximation,
+        transformed_cholesky_block_count=block_count,
+        transformed_cholesky_application_count=block_count,
+    )
+
+
+def build_fused_cholesky_r123_decomposition(
+    doubles: RRDoubles,
+    factors: THCProjectorFactors,
+    t1: Any,
+    fock_oo: Any,
+    fock_ov: Any,
+    fock_vv: Any,
+    occupied_energies: Any,
+    virtual_energies: Any,
+    loo: Any,
+    lov: Any,
+    lvv: Any,
+    *,
+    level_shift: float = 0.0,
+    auxiliary_block_size: int = 1,
+    virtual_block_size: int = 8,
+    transfer_counter: Any = None,
+) -> tuple[RRResidual123Decomposition, FusedR123Construction]:
+    """Construct the complement and both R123 values without a complete RR call."""
+
+    _validate_factor_lifecycle(doubles, factors, loo, lov, lvv)
+    components = build_projected_ccsd_doubles_components(
+        doubles,
+        t1,
+        fock_oo,
+        fock_ov,
+        fock_vv,
+        occupied_energies,
+        virtual_energies,
+        loo,
+        lov,
+        lvv,
+        level_shift=level_shift,
+        auxiliary_block_size=auxiliary_block_size,
+        virtual_block_size=virtual_block_size,
+        transfer_counter=transfer_counter,
+    )
+    fused = build_fused_r123_construction(
+        doubles,
+        factors,
+        t1,
+        loo,
+        lov,
+        lvv,
+        auxiliary_block_size=auxiliary_block_size,
+    )
+    # The first assembled value is the complement itself.  There is no
+    # complete-RR core whose only purpose is a later exact-R123 subtraction.
+    complement = components.assemble_core(
+        initial_core=-fused.exact_rr.sigma_pair
+    )
+    complete_metadata = components.metadata()
+    complete_metadata.update({
+        "assembly": "component-offset-construction",
+        "initial_offset": "-exact_r123",
+        "complete_rr_evaluated_separately": False,
+    })
+    decomposition = RRResidual123Decomposition(
+        complement_core=complement,
+        exact_r123=fused.exact_rr,
+        fock_intermediates=components.fock_intermediates,
+        lagrangian_one_body=components.lagrangian_one_body,
+        complete_term_metadata=components.term_metadata,
+        complete_rr_metadata=complete_metadata,
+        construction=(
+            "component-offset-complement-with-shared-r123-cd-stream"
+        ),
+        fused_contraction_implementation=True,
+        complete_rr_evaluated_separately=False,
+        r123_application_count=1,
+        shared_transformed_cholesky_block_count=(
+            fused.transformed_cholesky_block_count
+        ),
+    )
+    return decomposition, fused
 
 
 def _read_control_scalar(
@@ -442,8 +726,9 @@ def build_hybrid_projected_ccsd_doubles_numerator(
             "replacement validation tolerances must be finite and non-negative"
         )
     _validate_factor_lifecycle(doubles, factors, loo, lov, lvv)
-    decomposition = build_shared_cholesky_r123_decomposition(
+    decomposition, fused_r123 = build_fused_cholesky_r123_decomposition(
         doubles,
+        factors,
         t1,
         fock_oo,
         fock_ov,
@@ -458,17 +743,7 @@ def build_hybrid_projected_ccsd_doubles_numerator(
         virtual_block_size=virtual_block_size,
         transfer_counter=transfer_counter,
     )
-    thc_core = factors.amplitude_core(doubles.core)
-    approximation = thc_residual_algorithms_1_3(
-        factors.y_occ,
-        factors.y_vir,
-        thc_core,
-        t1,
-        loo,
-        lov,
-        lvv,
-        auxiliary_block_size=auxiliary_block_size,
-    )
+    approximation = fused_r123.thc
     backprojected = approximation.to_rr(factors.tau)
     delta = backprojected - decomposition.exact_r123_core
     xp = _array_module(delta)
@@ -511,6 +786,7 @@ def build_hybrid_projected_ccsd_doubles_numerator(
         core=core,
         decomposition=decomposition,
         thc_approximation_1_3=approximation,
+        fused_r123_construction=fused_r123,
         thc_backprojected_core=backprojected,
         replacement_delta_core=delta,
         replacement_delta_norm=delta_norm,
@@ -735,6 +1011,21 @@ class THCRRCCSDIterationEngine(RRCCSDIterationEngine):
             "replacement_application_count": int(
                 self.replacement_application_count
             ),
+            "r123_application_count": int(
+                self.replacement_application_count
+            ),
+            "r123_evaluation_count": int(
+                2 * self.replacement_application_count
+            ),
+            "exact_r123_subtraction_count": int(
+                self.replacement_application_count
+            ),
+            "fused_contraction_implementation": True,
+            "fused_contraction_scope": (
+                "exact-and-thc-r123-share-t1-transformed-cholesky-blocks"
+            ),
+            "complete_rr_evaluated_separately": False,
+            "coarse_r123_diagram_partition_fused": False,
             "replacement_validation_atol": (
                 self.replacement_validation_atol
             ),
@@ -765,9 +1056,12 @@ class THCRRCCSDIterationEngine(RRCCSDIterationEngine):
 
 __all__ = [
     "RRResidual123Decomposition",
+    "FusedR123Construction",
     "THCHybridDoublesResult",
     "FullSpaceResidualDiagnostic",
     "build_shared_cholesky_r123_decomposition",
+    "build_fused_r123_construction",
+    "build_fused_cholesky_r123_decomposition",
     "build_hybrid_projected_ccsd_doubles_numerator",
     "diagnose_reconstructed_full_space_residual",
     "THCRRCCSDIterationEngine",

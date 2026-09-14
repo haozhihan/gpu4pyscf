@@ -8,6 +8,7 @@ from gpu4pyscf.cc.rr_residual import (
     CCFockIntermediates,
     ProjectedPairDenominator,
     build_cc_lagrangian_one_body,
+    build_projected_ccsd_doubles_components,
     build_projected_ccsd_doubles_numerator,
     build_ccsd_singles_numerator,
     build_cc_fock_intermediates,
@@ -439,6 +440,28 @@ def test_complete_projected_doubles_numerator_matches_dense_equation(full_rank):
     np.testing.assert_allclose(observed.core, expected, atol=5e-10)
     assert observed.materialized_dense_t2 is False
     assert observed.materialized_four_index_eri is False
+    components = build_projected_ccsd_doubles_components(
+        doubles,
+        t1,
+        fock_oo,
+        fock_ov,
+        fock_vv,
+        occupied_energies,
+        virtual_energies,
+        loo,
+        lov,
+        lvv,
+        level_shift=level_shift,
+        auxiliary_block_size=2,
+        virtual_block_size=3,
+    )
+    np.testing.assert_allclose(components.assemble_core(), observed.core)
+    offset = np.eye(rank) * 0.125
+    np.testing.assert_allclose(
+        components.assemble_core(initial_core=-offset) + offset,
+        observed.core,
+    )
+    assert components.metadata()["assembled_complete_core"] is False
     gemm = build_projected_ccsd_doubles_numerator(
         doubles,
         t1,
