@@ -96,6 +96,8 @@ class THCResidual123Result:
     algorithm_1_provenance: Optional[dict[str, Any]] = None
     algorithm_3_provenance: Optional[dict[str, Any]] = None
     provenance_largest_intermediate_nbytes: int = 0
+    coarse_ledger: Optional[dict[str, Any]] = None
+    coarse_ledger_largest_intermediate_nbytes: int = 0
 
     def to_rr(self, tau: Any):
         """Return ``tau @ sigma_thc @ tau.T`` in the RR working basis."""
@@ -107,6 +109,7 @@ class THCResidual123Result:
             self.algorithm_1_provenance is not None
             and self.algorithm_3_provenance is not None
         )
+        coarse_available = self.coarse_ledger is not None
         return {
             "paper": "Hohenstein-2022",
             "equations": [28, 29, 31],
@@ -124,6 +127,20 @@ class THCResidual123Result:
             ),
             "largest_intermediate_nbytes_scope": "aggregate-residual-path",
             "provenance_audit_memory_scope": "reported-separately",
+            "coarse_r123_audit_ledger": coarse_available,
+            "coarse_ledger_available": coarse_available,
+            "coarse_r123_ledger_kind": "audit-only",
+            "coarse_r123_diagram_partition_fused": False,
+            "performance_eligible": False,
+            "coarse_ledger_largest_intermediate_nbytes": int(
+                self.coarse_ledger_largest_intermediate_nbytes
+            ),
+            "coarse_ledger_memory_scope": "reported-separately",
+            "coarse_ledger_buckets": (
+                list(self.coarse_ledger)
+                if self.coarse_ledger is not None
+                else []
+            ),
             "algorithm_1_provenance": (
                 list(self.algorithm_1_provenance)
                 if self.algorithm_1_provenance is not None
@@ -160,12 +177,15 @@ class PairFactorResidual123Result:
     algorithm_1_provenance: Optional[dict[str, Any]] = None
     algorithm_3_provenance: Optional[dict[str, Any]] = None
     provenance_largest_intermediate_nbytes: int = 0
+    coarse_ledger: Optional[dict[str, Any]] = None
+    coarse_ledger_largest_intermediate_nbytes: int = 0
 
     def metadata(self) -> dict[str, Any]:
         available = (
             self.algorithm_1_provenance is not None
             and self.algorithm_3_provenance is not None
         )
+        coarse_available = self.coarse_ledger is not None
         return {
             "paper": "Hohenstein-2022",
             "equations": [28, 29, 31],
@@ -188,6 +208,20 @@ class PairFactorResidual123Result:
             ),
             "largest_intermediate_nbytes_scope": "aggregate-residual-path",
             "provenance_audit_memory_scope": "reported-separately",
+            "coarse_r123_audit_ledger": coarse_available,
+            "coarse_ledger_available": coarse_available,
+            "coarse_r123_ledger_kind": "audit-only",
+            "coarse_r123_diagram_partition_fused": False,
+            "performance_eligible": False,
+            "coarse_ledger_largest_intermediate_nbytes": int(
+                self.coarse_ledger_largest_intermediate_nbytes
+            ),
+            "coarse_ledger_memory_scope": "reported-separately",
+            "coarse_ledger_buckets": (
+                list(self.coarse_ledger)
+                if self.coarse_ledger is not None
+                else []
+            ),
             "algorithm_1_provenance": (
                 list(self.algorithm_1_provenance)
                 if self.algorithm_1_provenance is not None
@@ -376,6 +410,42 @@ def _validate_pair_factor_inputs(
         raise ValueError("lvv must have shape (naux,nvir,nvir)")
 
 
+def _coarse_r123_ledger(
+    occupied: Any,
+    virtual: Any,
+    core: Any,
+    algorithm_2: Any,
+    algorithm_3: Any,
+):
+    """Build audit-only coarse buckets from projected Hoo/Hvv factors.
+
+    With ``O`` and ``V`` the projected Hoo and Hvv factors, respectively,
+    Algorithm 1 is ``(O-V) C (O-V)``.  The first two buckets retain its pure
+    ``OCO`` and ``VCV`` pieces.  The mixed bucket contains the two Algorithm 1
+    cross terms and the complete Algorithms 2 and 3 contributions.  This is
+    an accounting ledger only; it does not assert that these buckets are the
+    production PySCF Woooo/Wvvvv/ring diagram partition.
+    """
+
+    xp = _array_module(occupied)
+    woooo = xp.einsum("AXY,YZ,AWZ->XW", occupied, core, occupied)
+    wvvvv = xp.einsum("AXY,YZ,AWZ->XW", virtual, core, virtual)
+    ring_mixed = -(
+        xp.einsum("AXY,YZ,AWZ->XW", occupied, core, virtual)
+        + xp.einsum("AXY,YZ,AWZ->XW", virtual, core, occupied)
+    )
+    ring_mixed += algorithm_2 + algorithm_3
+    ledger = {
+        "woooo_factorized": woooo,
+        "wvvvv_factorized": wvvvv,
+        "ring_mixed": ring_mixed,
+    }
+    largest = max(
+        int(value.nbytes) for value in (occupied, virtual, *ledger.values())
+    )
+    return ledger, largest
+
+
 def _pair_factor_algorithms_1_3_block(
     pair_factor: Any,
     core: Any,
@@ -457,6 +527,8 @@ def _pair_factor_algorithms_1_3_block(
         )
     )
     provenance = None
+    coarse_ledger = None
+    coarse_largest = 0
     if return_provenance:
         if loo is None or lvv is None:
             raise ValueError(
@@ -465,8 +537,17 @@ def _pair_factor_algorithms_1_3_block(
         provenance = _pair_factor_provenance_algorithms_1_3_block(
             pair_factor, core, transformed, loo, lvv, nocc, nvir
         )
+        coarse_ledger, coarse_largest = _coarse_r123_ledger(
+            occupied, virtual, core, part2, part3
+        )
     if return_provenance:
-        return part1, part2, part3, largest, provenance
+        return part1, part2, part3, largest, (
+            provenance[0],
+            provenance[1],
+            provenance[2],
+            coarse_ledger,
+            coarse_largest,
+        )
     return part1, part2, part3, largest
 
 
@@ -610,6 +691,8 @@ def pair_factor_residual_algorithms_1_3(
     provenance1 = None
     provenance3 = None
     provenance_largest = 0
+    coarse_ledger = None
+    coarse_largest = 0
     largest = 0
     for start in range(0, naux, block_size):
         stop = min(start + block_size, naux)
@@ -640,10 +723,17 @@ def pair_factor_residual_algorithms_1_3(
         sigma2 += part2
         sigma3 += part3
         if record_provenance and block_provenance is not None:
-            block1, block3, block_provenance_largest = block_provenance
+            (
+                block1,
+                block3,
+                block_provenance_largest,
+                block_coarse,
+                block_coarse_largest,
+            ) = block_provenance
             provenance_largest = max(
                 provenance_largest, block_provenance_largest
             )
+            coarse_largest = max(coarse_largest, block_coarse_largest)
             if provenance1 is None:
                 provenance1 = {
                     key: xp.zeros_like(value)
@@ -653,10 +743,16 @@ def pair_factor_residual_algorithms_1_3(
                     key: xp.zeros_like(value)
                     for key, value in block3.items()
                 }
+                coarse_ledger = {
+                    key: xp.zeros_like(value)
+                    for key, value in block_coarse.items()
+                }
             for key, value in block1.items():
                 provenance1[key] += value
             for key, value in block3.items():
                 provenance3[key] += value
+            for key, value in block_coarse.items():
+                coarse_ledger[key] += value
         largest = max(
             largest,
             transformed.storage_nbytes,
@@ -674,6 +770,8 @@ def pair_factor_residual_algorithms_1_3(
         algorithm_1_provenance=provenance1,
         algorithm_3_provenance=provenance3,
         provenance_largest_intermediate_nbytes=provenance_largest,
+        coarse_ledger=coarse_ledger,
+        coarse_ledger_largest_intermediate_nbytes=coarse_largest,
     )
 
 
@@ -746,6 +844,8 @@ def thc_residual_algorithms_1_3(
     provenance1 = None
     provenance3 = None
     provenance_largest = 0
+    coarse_ledger = None
+    coarse_largest = 0
     pair_factor = None
     if record_provenance:
         pair_factor = xp.einsum("iX,aX->iaX", y_occ, y_vir).reshape(
@@ -785,6 +885,26 @@ def thc_residual_algorithms_1_3(
                 provenance1[key] += value
             for key, value in block3.items():
                 provenance3[key] += value
+            pair_view = pair_factor.reshape(
+                int(y_occ.shape[0]), int(y_vir.shape[0]), rank
+            )
+            occupied = xp.einsum(
+                "iaX,Aki,kaY->AXY", pair_view, transformed.hoo, pair_view
+            )
+            virtual = xp.einsum(
+                "iaX,Aac,icY->AXY", pair_view, transformed.hvv, pair_view
+            )
+            block_coarse, block_coarse_largest = _coarse_r123_ledger(
+                occupied, virtual, core, part2, part3
+            )
+            coarse_largest = max(coarse_largest, block_coarse_largest)
+            if coarse_ledger is None:
+                coarse_ledger = {
+                    key: xp.zeros_like(value)
+                    for key, value in block_coarse.items()
+                }
+            for key, value in block_coarse.items():
+                coarse_ledger[key] += value
         sigma1 += part1
         sigma2 += part2
         sigma3 += part3
@@ -806,6 +926,8 @@ def thc_residual_algorithms_1_3(
         algorithm_1_provenance=provenance1,
         algorithm_3_provenance=provenance3,
         provenance_largest_intermediate_nbytes=provenance_largest,
+        coarse_ledger=coarse_ledger,
+        coarse_ledger_largest_intermediate_nbytes=coarse_largest,
     )
 
 
