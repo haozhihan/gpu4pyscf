@@ -424,20 +424,50 @@ def block_c2s_diag(angular, counts):
         raise RuntimeError('failed in block_diag kernel')
     return cart2sph
 
-def block_diag(blocks, out=None):
+def block_diag(blocks, out=None, *, transfer_audit=None,
+               audit_prefix='block_diag'):
     '''
     each block size is up to 16x16
     '''
-    rows = np.cumsum(np.asarray([0] + [x.shape[0] for x in blocks]))
-    cols = np.cumsum(np.asarray([0] + [x.shape[1] for x in blocks]))
-    offsets = np.cumsum(np.asarray([0] + [x.shape[0]*x.shape[1] for x in blocks]))
+    rows = np.cumsum(
+        np.asarray([0] + [x.shape[0] for x in blocks]), dtype=np.int64)
+    cols = np.cumsum(
+        np.asarray([0] + [x.shape[1] for x in blocks]), dtype=np.int64)
+    offsets = np.cumsum(
+        np.asarray([0] + [x.shape[0]*x.shape[1] for x in blocks]),
+        dtype=np.int64)
+    int32_max = np.iinfo(np.int32).max
+    if any(values.size and int(values[-1]) > int32_max
+           for values in (rows, cols, offsets)):
+        raise OverflowError('block_diag metadata exceeds the int32 CUDA ABI')
+    rows_host = np.ascontiguousarray(rows, dtype=np.int32)
+    cols_host = np.ascontiguousarray(cols, dtype=np.int32)
+    offsets_host = np.ascontiguousarray(offsets, dtype=np.int32)
 
     m, n = rows[-1], cols[-1]
     if out is None: out = cupy.zeros([m, n])
-    rows = cupy.asarray(rows, dtype='int32')
-    cols = cupy.asarray(cols, dtype='int32')
-    offsets = cupy.asarray(offsets, dtype='int32')
+    rows = cupy.asarray(rows_host)
+    cols = cupy.asarray(cols_host)
+    offsets = cupy.asarray(offsets_host)
     data = cupy.concatenate([x.ravel() for x in blocks])
+    if transfer_audit is not None:
+        for suffix, host, logical_payload in (
+            ('rows', rows_host, 'block-diagonal cumulative row offsets'),
+            ('cols', cols_host, 'block-diagonal cumulative column offsets'),
+            ('offsets', offsets_host, 'block-diagonal flattened-data offsets'),
+        ):
+            transfer_audit.record_transfer(
+                'h2d', f'{audit_prefix}_{suffix}', int(host.nbytes), count=1,
+                logical_payload=logical_payload,
+                provenance='gpu4pyscf.lib.cupy_helper.block_diag:int32_metadata',
+            )
+        transfer_audit.record_device_payload(
+            f'{audit_prefix}_concatenated_blocks', int(data.nbytes),
+            logical_payload='device concatenation of already-resident blocks',
+            provenance='gpu4pyscf.lib.cupy_helper.block_diag:cupy.concatenate',
+            origin='device-generated',
+            lifetime='transient-setup',
+        )
     stream = cupy.cuda.get_current_stream()
     err = libcupy_helper.block_diag(
         ctypes.cast(stream.ptr, ctypes.c_void_p),
@@ -452,6 +482,13 @@ def block_diag(blocks, out=None):
     )
     if err != 0:
         raise RuntimeError('failed in block_diag kernel')
+    if transfer_audit is not None:
+        transfer_audit.record_device_payload(
+            f'{audit_prefix}_coeff', int(out.nbytes),
+            logical_payload='final block-diagonal coefficient matrix',
+            provenance='gpu4pyscf.lib.cupy_helper.block_diag:device_kernel_output',
+            origin='device-generated',
+        )
     return out
 
 def take_last2d(a, indices, out=None):
