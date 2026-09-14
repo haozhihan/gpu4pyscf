@@ -115,9 +115,12 @@ The driver supports seven explicit method labels:
 * `fno`: MP2 frozen-natural-orbital CCSD with the recorded Delta-MP2 value.
 * `rr_cd`: compressed RRCCSD driven by the direct Cholesky provider.
 * `thc_cd`: the direct-Cholesky R123/complement full-pair amplitude-THC
-  validation endpoint. The shared split is implemented as a proof path, but
-  remains performance-ineligible because complete RR and exact R123 are still
-  evaluated separately and inexact THC is fail-closed.
+  validation endpoint. The production proof path shares each T1-transformed
+  Cholesky block between exact-RR and THC R123 contractions and constructs the
+  complement without calling the complete-RR wrapper. It remains
+  performance-ineligible because all six exact RR component kernels and the
+  exact R123 subtraction oracle are still evaluated, and inexact THC is
+  fail-closed.
 * `rr_canonical`: RRCCSD using the dense canonical residual for validation.
 * `thc_canonical`: the dense two-level THC validation surrogate.
 
