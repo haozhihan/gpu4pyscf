@@ -2,6 +2,7 @@
 #SBATCH --job-name=rrccsd-gpu-tests
 #SBATCH --account=mri
 #SBATCH --partition=mrigpu
+#SBATCH --nodelist=compute-1-6
 #SBATCH --gres=gpu:nvidia:1
 #SBATCH --gres-flags=enforce-binding
 #SBATCH --cpus-per-task=8

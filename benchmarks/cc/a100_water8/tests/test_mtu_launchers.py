@@ -67,12 +67,15 @@ def test_strict_numa_launchers_reserve_all_physical_cores(name: str) -> None:
     assert "#SBATCH --hint=nomultithread" in text
 
 
-def test_gint_qualification_and_release_launcher_pin_fixed_mtu_node() -> None:
-    text = (ROOT / "run_mtu_gint_gate.sbatch").read_text(encoding="utf-8")
+@pytest.mark.parametrize(
+    "name", ("run_mtu_gint_gate.sbatch", "run_mtu_gpu_tests.sbatch")
+)
+def test_candidate_validation_launchers_pin_fixed_mtu_node(name: str) -> None:
+    text = (ROOT / name).read_text(encoding="utf-8")
 
-    # Both snapshot A and snapshot B use this entry point.  Slurm therefore
-    # records ReqNodeList=compute-1-6 for each, and the release pin compares
-    # the B allocation with A's measured node.
+    # Snapshot A/B gates and the GPU regression suite must execute on the
+    # fixed A100/EPYC target.  A command-line override is not sufficient for a
+    # future direct ``sbatch`` invocation, so keep the pin in each artifact.
     assert "#SBATCH --nodelist=compute-1-6" in text
 
 
