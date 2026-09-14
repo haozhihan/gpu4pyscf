@@ -93,6 +93,8 @@ class THCResidual123Result:
     algorithm_3: Any
     auxiliary_block_size: int
     largest_intermediate_nbytes: int
+    algorithm_1_provenance: Optional[dict[str, Any]] = None
+    algorithm_3_provenance: Optional[dict[str, Any]] = None
 
     def to_rr(self, tau: Any):
         """Return ``tau @ sigma_thc @ tau.T`` in the RR working basis."""
@@ -110,6 +112,11 @@ class THCResidual123Result:
             "largest_intermediate_nbytes": int(self.largest_intermediate_nbytes),
             "materialized_dense_t2": False,
             "materialized_four_index_eri": False,
+            "provenance_decomposition": True,
+            "algorithm_1_provenance": ["LL", "LT1", "T1L", "T1T1"],
+            "algorithm_3_provenance": [
+                "Loo_Lvv", "Loo_T1vv", "T1oo_Lvv", "T1oo_T1vv"
+            ],
         }
 
 
@@ -133,6 +140,8 @@ class PairFactorResidual123Result:
     nvir: int
     auxiliary_block_size: int
     largest_intermediate_nbytes: int
+    algorithm_1_provenance: Optional[dict[str, Any]] = None
+    algorithm_3_provenance: Optional[dict[str, Any]] = None
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -150,6 +159,11 @@ class PairFactorResidual123Result:
             ),
             "materialized_dense_t2": False,
             "materialized_four_index_eri": False,
+            "provenance_decomposition": True,
+            "algorithm_1_provenance": ["LL", "LT1", "T1L", "T1T1"],
+            "algorithm_3_provenance": [
+                "Loo_Lvv", "Loo_T1vv", "T1oo_Lvv", "T1oo_T1vv"
+            ],
         }
 
 
@@ -334,6 +348,10 @@ def _pair_factor_algorithms_1_3_block(
     transformed: T1TransformedCholesky,
     nocc: int,
     nvir: int,
+    *,
+    loo: Any = None,
+    lvv: Any = None,
+    return_provenance: bool = False,
 ):
     """Return Eqs. 28, 29 and 31 for one Cholesky block.
 
@@ -404,7 +422,95 @@ def _pair_factor_algorithms_1_3_block(
             part3,
         )
     )
+    provenance = None
+    if return_provenance:
+        if loo is None or lvv is None:
+            raise ValueError(
+                "loo and lvv are required when return_provenance is true"
+            )
+        provenance = _pair_factor_provenance_algorithms_1_3_block(
+            pair_factor, core, transformed, loo, lvv, nocc, nvir
+        )
+    elif loo is not None or lvv is not None:
+        if loo is None or lvv is None:
+            raise ValueError("loo and lvv are required together for provenance")
+    if return_provenance:
+        return part1, part2, part3, largest, provenance
     return part1, part2, part3, largest
+
+
+def _pair_factor_provenance_algorithms_1_3_block(
+    pair_factor: Any,
+    core: Any,
+    transformed: T1TransformedCholesky,
+    loo: Any,
+    lvv: Any,
+    nocc: int,
+    nvir: int,
+):
+    """Expand Algorithms 1 and 3 by their base-L/T1-dressed provenance.
+
+    The decomposition is performed after projection into pair-factor space,
+    so it works for a genuinely non-separable RR factor as well as for the
+    separable THC endpoint.  ``L`` denotes the bare ``Loo``/``Lvv`` blocks;
+    ``T1`` denotes the complete linear T1 piece, including the minus sign in
+    ``Hvv = Lvv - t1*Lov``.  Algorithm 1 is quadratic in the combined
+    ``Hoo-Hvv`` factor and therefore has four ordered subcores.  Algorithm 3
+    is linear in the Hoo/Hvv coupling and has four source-pair subcores.
+    """
+
+    xp = _array_module(pair_factor)
+    rank = int(pair_factor.shape[1])
+    u = pair_factor.reshape(nocc, nvir, rank)
+    if loo.shape != transformed.hoo.shape or lvv.shape != transformed.hvv.shape:
+        raise ValueError("base Cholesky blocks do not match transformed blocks")
+
+    # Recover the two pieces without retaining a second copy in the public
+    # transformed-factor object.  This keeps the production memory contract
+    # unchanged while making the provenance explicit at the residual call.
+    hoo_l = loo
+    hoo_t1 = transformed.hoo - loo
+    hvv_l = lvv
+    hvv_t1 = transformed.hvv - lvv
+
+    oo_l = xp.einsum("iaX,Aki,kaY->AXY", u, hoo_l, u)
+    oo_t1 = xp.einsum("iaX,Aki,kaY->AXY", u, hoo_t1, u)
+    vv_l = xp.einsum("iaX,Aac,icY->AXY", u, hvv_l, u)
+    vv_t1 = xp.einsum("iaX,Aac,icY->AXY", u, hvv_t1, u)
+    c_l = oo_l - vv_l
+    c_t1 = oo_t1 - vv_t1
+    algorithm_1 = {
+        "LL": xp.einsum("AXY,YZ,AWZ->XW", c_l, core, c_l),
+        "LT1": xp.einsum("AXY,YZ,AWZ->XW", c_l, core, c_t1),
+        "T1L": xp.einsum("AXY,YZ,AWZ->XW", c_t1, core, c_l),
+        "T1T1": xp.einsum("AXY,YZ,AWZ->XW", c_t1, core, c_t1),
+    }
+
+    pair_gram = pair_factor.T @ pair_factor
+    dressed_core = pair_gram @ core
+    oo_action_l = xp.einsum("Akj,jbX->AkbX", hoo_l, u)
+    oo_action_t1 = xp.einsum("Akj,jbX->AkbX", hoo_t1, u)
+    vv_action_l = xp.einsum("Abc,kcY->AkbY", hvv_l, u)
+    vv_action_t1 = xp.einsum("Abc,kcY->AkbY", hvv_t1, u)
+    coupling = {
+        "Loo_Lvv": xp.einsum(
+            "AkbX,AkbY->XY", oo_action_l, vv_action_l
+        ),
+        "Loo_T1vv": xp.einsum(
+            "AkbX,AkbY->XY", oo_action_l, vv_action_t1
+        ),
+        "T1oo_Lvv": xp.einsum(
+            "AkbX,AkbY->XY", oo_action_t1, vv_action_l
+        ),
+        "T1oo_T1vv": xp.einsum(
+            "AkbX,AkbY->XY", oo_action_t1, vv_action_t1
+        ),
+    }
+    algorithm_3 = {
+        key: -(dressed_core @ value.T + value @ dressed_core.T)
+        for key, value in coupling.items()
+    }
+    return algorithm_1, algorithm_3
 
 
 def pair_factor_residual_algorithms_1_3(
@@ -445,20 +551,44 @@ def pair_factor_residual_algorithms_1_3(
     sigma1 = xp.zeros((rank, rank), dtype=dtype)
     sigma2 = xp.zeros_like(sigma1)
     sigma3 = xp.zeros_like(sigma1)
+    provenance1 = None
+    provenance3 = None
     largest = 0
     for start in range(0, naux, block_size):
         stop = min(start + block_size, naux)
         transformed = transform_cholesky_t1(
             t1, loo[start:stop], lov[start:stop], lvv[start:stop]
         )
-        part1, part2, part3, block_largest = (
+        part1, part2, part3, block_largest, block_provenance = (
             _pair_factor_algorithms_1_3_block(
-                pair_factor, core, transformed, nocc, nvir
+                pair_factor,
+                core,
+                transformed,
+                nocc,
+                nvir,
+                loo=loo[start:stop],
+                lvv=lvv[start:stop],
+                return_provenance=True,
             )
         )
         sigma1 += part1
         sigma2 += part2
         sigma3 += part3
+        if block_provenance is not None:
+            block1, block3 = block_provenance
+            if provenance1 is None:
+                provenance1 = {
+                    key: xp.zeros_like(value)
+                    for key, value in block1.items()
+                }
+                provenance3 = {
+                    key: xp.zeros_like(value)
+                    for key, value in block3.items()
+                }
+            for key, value in block1.items():
+                provenance1[key] += value
+            for key, value in block3.items():
+                provenance3[key] += value
         largest = max(
             largest,
             transformed.storage_nbytes,
@@ -473,6 +603,8 @@ def pair_factor_residual_algorithms_1_3(
         nvir=nvir,
         auxiliary_block_size=block_size,
         largest_intermediate_nbytes=largest,
+        algorithm_1_provenance=provenance1,
+        algorithm_3_provenance=provenance3,
     )
 
 
@@ -530,6 +662,11 @@ def thc_residual_algorithms_1_3(
     sigma1 = xp.zeros((rank, rank), dtype=dtype)
     sigma2 = xp.zeros_like(sigma1)
     sigma3 = xp.zeros_like(sigma1)
+    provenance1 = None
+    provenance3 = None
+    pair_factor = xp.einsum("iX,aX->iaX", y_occ, y_vir).reshape(
+        int(y_occ.shape[0]) * int(y_vir.shape[0]), rank
+    )
     largest = 0
     for start in range(0, naux, block_size):
         stop = min(start + block_size, naux)
@@ -539,6 +676,27 @@ def thc_residual_algorithms_1_3(
         part1 = thc_algorithm_1(y_occ, y_vir, core, transformed)
         part2 = thc_algorithm_2(y_occ, y_vir, core, transformed)
         part3 = thc_algorithm_3(y_occ, y_vir, core, transformed)
+        block_provenance = _pair_factor_provenance_algorithms_1_3_block(
+            pair_factor,
+            core,
+            transformed,
+            loo[start:stop],
+            lvv[start:stop],
+            int(y_occ.shape[0]),
+            int(y_vir.shape[0]),
+        )
+        block1, block3 = block_provenance
+        if provenance1 is None:
+            provenance1 = {
+                key: xp.zeros_like(value) for key, value in block1.items()
+            }
+            provenance3 = {
+                key: xp.zeros_like(value) for key, value in block3.items()
+            }
+        for key, value in block1.items():
+            provenance1[key] += value
+        for key, value in block3.items():
+            provenance3[key] += value
         sigma1 += part1
         sigma2 += part2
         sigma3 += part3
@@ -557,6 +715,8 @@ def thc_residual_algorithms_1_3(
         algorithm_3=sigma3,
         auxiliary_block_size=block_size,
         largest_intermediate_nbytes=largest,
+        algorithm_1_provenance=provenance1,
+        algorithm_3_provenance=provenance3,
     )
 
 

@@ -221,6 +221,56 @@ def test_arbitrary_rr_pair_factor_matches_dense_equations_term_by_term():
     np.testing.assert_allclose(observed.algorithm_2, expected[1], atol=2e-9)
     np.testing.assert_allclose(observed.algorithm_3, expected[2], atol=2e-9)
 
+    # Algorithm 1 is expanded by the two source pieces of the combined
+    # Hoo-Hvv factor.  The ordered cross terms are retained separately.
+    p1 = observed.algorithm_1_provenance
+    p3 = observed.algorithm_3_provenance
+    assert set(p1) == {"LL", "LT1", "T1L", "T1T1"}
+    assert set(p3) == {
+        "Loo_Lvv", "Loo_T1vv", "T1oo_Lvv", "T1oo_T1vv"
+    }
+    for value in tuple(p1.values()) + tuple(p3.values()):
+        assert value.shape == observed.algorithm_1.shape
+        assert value.dtype == observed.algorithm_1.dtype
+    np.testing.assert_allclose(sum(p1.values()), observed.algorithm_1)
+    np.testing.assert_allclose(sum(p3.values()), observed.algorithm_3)
+    np.testing.assert_allclose(sum(p1.values()), expected[0], atol=2e-9)
+    np.testing.assert_allclose(sum(p3.values()), expected[2], atol=2e-9)
+    assert np.max(np.abs(p1["LT1"])) > 1e-8
+    assert np.max(np.abs(p1["T1L"])) > 1e-8
+    assert np.max(np.abs(p3["Loo_T1vv"])) > 1e-8
+    assert np.max(np.abs(p3["T1oo_Lvv"])) > 1e-8
+
+
+def test_thc_provenance_preserves_separable_endpoint_and_records_metadata():
+    t1, _factors, loo, lov, lvv, y_occ, y_vir, core = _problem(212)
+    observed = thc_residual_algorithms_1_3(
+        y_occ,
+        y_vir,
+        core,
+        t1,
+        loo,
+        lov,
+        lvv,
+        auxiliary_block_size=2,
+    )
+    np.testing.assert_allclose(
+        sum(observed.algorithm_1_provenance.values()), observed.algorithm_1,
+        atol=3e-9,
+    )
+    np.testing.assert_allclose(
+        sum(observed.algorithm_3_provenance.values()), observed.algorithm_3,
+        atol=3e-9,
+    )
+    metadata = observed.metadata()
+    assert metadata["provenance_decomposition"] is True
+    assert metadata["algorithm_1_provenance"] == [
+        "LL", "LT1", "T1L", "T1T1"
+    ]
+    assert metadata["algorithm_3_provenance"] == [
+        "Loo_Lvv", "Loo_T1vv", "T1oo_Lvv", "T1oo_T1vv"
+    ]
+
 
 def test_streamed_algorithms_and_rr_back_projection():
     t1, _factors, loo, lov, lvv, y_occ, y_vir, core = _problem(203)
@@ -277,6 +327,22 @@ def test_gpu_thc_algorithms_stay_on_device():
     cp.testing.assert_allclose(
         gpu.sigma_thc, cp.asarray(cpu.sigma_thc), atol=3e-9, rtol=3e-11
     )
+    for name in cpu.algorithm_1_provenance:
+        assert isinstance(gpu.algorithm_1_provenance[name], cp.ndarray)
+        cp.testing.assert_allclose(
+            gpu.algorithm_1_provenance[name],
+            cp.asarray(cpu.algorithm_1_provenance[name]),
+            atol=3e-9,
+            rtol=3e-11,
+        )
+    for name in cpu.algorithm_3_provenance:
+        assert isinstance(gpu.algorithm_3_provenance[name], cp.ndarray)
+        cp.testing.assert_allclose(
+            gpu.algorithm_3_provenance[name],
+            cp.asarray(cpu.algorithm_3_provenance[name]),
+            atol=3e-9,
+            rtol=3e-11,
+        )
 
 
 def test_gpu_general_pair_reference_stays_on_device():
@@ -319,3 +385,19 @@ def test_gpu_general_pair_reference_stays_on_device():
     cp.testing.assert_allclose(
         gpu.sigma_pair, cp.asarray(cpu.sigma_pair), atol=5e-8, rtol=3e-11
     )
+    for name in cpu.algorithm_1_provenance:
+        assert isinstance(gpu.algorithm_1_provenance[name], cp.ndarray)
+        cp.testing.assert_allclose(
+            gpu.algorithm_1_provenance[name],
+            cp.asarray(cpu.algorithm_1_provenance[name]),
+            atol=5e-8,
+            rtol=3e-11,
+        )
+    for name in cpu.algorithm_3_provenance:
+        assert isinstance(gpu.algorithm_3_provenance[name], cp.ndarray)
+        cp.testing.assert_allclose(
+            gpu.algorithm_3_provenance[name],
+            cp.asarray(cpu.algorithm_3_provenance[name]),
+            atol=5e-8,
+            rtol=3e-11,
+        )
