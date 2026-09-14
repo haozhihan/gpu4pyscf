@@ -1,6 +1,6 @@
 {
   "schema": "gpu4pyscf.water8.implementation-status.v2",
-  "as_of_utc": "2026-09-14T11:42:13+00:00",
+  "as_of_utc": "2026-09-14T11:50:44+00:00",
   "purpose": "Candid implementation and MTU evidence ledger for the fixed WATER27 H2O8d2d single-A100 CCSD project.",
   "claim_policy": {
     "ten_x_claim_allowed": false,
@@ -20,7 +20,7 @@
     "g0_worktree": "analysis/research/ccsd/gpu4pyscf-g0-baseline",
     "feature_source_state": "a2-published-qualification-queued-post-a2-direct-thc-audit-development",
     "feature_performance_eligible": false,
-    "feature_head_before_ledger_update": "e6799eabc03f64fc4a4fde17ad01921265602d36",
+    "feature_head_before_ledger_update": "b29a65a7e7b8b86de213fb61b007bf16689822c4",
     "merged_implementation_commits": {
       "fused_r123": "29ceab6",
       "fixed_gpu_test_node": "56291e7",
@@ -174,7 +174,7 @@
       "formal_performance_eligible": false,
       "use": "A3 development lineage; never substitute for the frozen A2 job source",
       "missing": "new immutable snapshot and MTU GPU validation after a production-relevant change is selected",
-      "head_before_ledger_update": "e6799eabc03f64fc4a4fde17ad01921265602d36",
+      "head_before_ledger_update": "b29a65a7e7b8b86de213fb61b007bf16689822c4",
       "superseded_by": "candidate-snapshot-a2-4c23ed1b-for-current-queued-evidence-only"
     },
     {
@@ -472,7 +472,17 @@
           "failed": 0
         },
         "eri_thc_algorithms_4_5_independent_review": "no-P0-P1-P2",
-        "eri_thc_factorization_independent_review": "no-P0-P1-P2-after-one-correction-round"
+        "eri_thc_factorization_independent_review": "no-P0-P1-P2-after-one-correction-round",
+        "development_a100_cuda_audit": {
+          "job_id": "62629",
+          "node": "compute-1-0",
+          "gpu": "NVIDIA A100-SXM4-80GB",
+          "passed": 35,
+          "skipped_environment": 1,
+          "failed": 0,
+          "performance_eligible": false,
+          "scope": "Algorithms 4-5 and weighted ERI-THC factorization CUDA correctness"
+        }
       },
       "limitations": [
         "The coordinate transforms/stream are shared, but exact Algorithms 1-3 are still evaluated as the subtraction oracle in addition to the six exact RR component kernels.",
@@ -1041,6 +1051,36 @@
       "script_sha256": "8768b9228dddcbd12482864b820568e3e9de5b117986f691ece7eae69c02de1b",
       "evidence_state": "hypothesis",
       "formal_performance_eligible": false
+    },
+    {
+      "job_id": "62629",
+      "scheduler_state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed": "00:00:04",
+      "node": "compute-1-0",
+      "source_track": "feature-candidate-unfrozen",
+      "source_git_head": "b29a65a7e7b8b86de213fb61b007bf16689822c4",
+      "git_archive_sha256": "67b606f899ed5d4436e372417f3979be9dcec9d717cfec19338e4d4fb1a2f914",
+      "runtime_bundle_id": "ba633c2efef78ffb520a2323320820630ad6d676f4388a36b91666f7ae85df6e",
+      "evidence_state": "local_measured",
+      "classification": "development-cuda-correctness-only-nonfixed-node",
+      "formal_performance_eligible": false,
+      "reason": "The selected Python audit kernels were tested on an idle A100 development node; the job did not use the fixed WATER8 target topology and collected no performance evidence.",
+      "measurements": {
+        "gpu": "NVIDIA A100-SXM4-80GB",
+        "pytest_passed": 35,
+        "pytest_skipped": 1,
+        "pytest_failed": 0,
+        "skipped_test": "cross-device rejection requires two CUDA devices visible to one job"
+      },
+      "raw_result": "results/mtu/development-gpu-tests/b29a65a-62629/result.json",
+      "raw_result_sha256": "34aabf3ddd7b3c6da5f60347b45206eb58ad9f6c05debc43df7b51c6a085d28f",
+      "junit_result": "results/mtu/development-gpu-tests/b29a65a-62629/pytest.xml",
+      "junit_sha256": "c3708509f386e7dce3f77e8d604a7e939f26a7118f4fdb11abc298b7782d84ac",
+      "slurm_log": "results/mtu/development-gpu-tests/b29a65a-62629/slurm.log",
+      "slurm_log_sha256": "d228e6b64ddc8cc337c55741c239b705d41583639afe608de50e46ce22f021e2",
+      "source_evidence": "results/mtu/development-gpu-tests/b29a65a-62629/source-evidence.json",
+      "source_evidence_sha256": "a0197ff50a5497c299e97c76464361493b804cc6b8f459ba3cd8e9cf8ed9ad17"
     }
   ],
   "supporting_evidence": {
