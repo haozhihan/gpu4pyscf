@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Audit-only ERI-THC contractions for paper Algorithms 4 and 5.
+"""Audit-only ERI-THC contractions for paper Algorithms 4--6.
 
 This module implements the raw projected contributions in Eqs. 32 and 33 of
 Hohenstein *et al.*, J. Chem. Phys. **156**, 054102 (2022), DOI
 10.1063/5.0077770 (arXiv:2111.11473v1).  The corresponding factorized
-contraction orders are Appendix Algorithms 4 and 5.
+contraction orders are Appendix Algorithms 4--6.  Algorithm 6 evaluates the
+sum of Eqs. 32 and 33 (Eq. 34) through shared three-index intermediates.
 
 The amplitude representation is
 
@@ -74,7 +75,7 @@ def _require_one_real_dtype(*values: Any) -> np.dtype:
         raise TypeError("all ERI-THC tensors must have the same dtype")
     dtype = dtypes[0]
     if np.issubdtype(dtype, np.complexfloating):
-        raise NotImplementedError("ERI-THC Algorithms 4-5 currently require real RHF")
+        raise NotImplementedError("ERI-THC Algorithms 4-6 currently require real RHF")
     if not np.issubdtype(dtype, np.floating):
         raise TypeError("ERI-THC tensors must have a floating-point dtype")
     return dtype
@@ -106,14 +107,16 @@ def _require_finite(
         raise ValueError(f"non-finite values in one of: {names}")
 
 
-def _positive_block_size(value: Any) -> int:
+def _positive_block_size(
+    value: Any, *, name: str = "outer_block_size"
+) -> int:
     if isinstance(value, (bool, np.bool_)) or not isinstance(
         value, (int, np.integer)
     ):
-        raise TypeError("outer_block_size must be an integer")
+        raise TypeError(f"{name} must be an integer")
     value = int(value)
     if value < 1:
-        raise ValueError("outer_block_size must be positive")
+        raise ValueError(f"{name} must be positive")
     return value
 
 
@@ -215,8 +218,8 @@ class ERITHCFactors:
             "paper": "Hohenstein-2022",
             "paper_source": "arXiv:2111.11473v1",
             "eri_equation": 17,
-            "residual_equations": [32, 33],
-            "algorithms": [4, 5],
+            "residual_equations": [32, 33, 34],
+            "algorithms": [4, 5, 6],
             "nocc": self.nocc,
             "nvir": self.nvir,
             "eri_rank": self.rank,
@@ -225,6 +228,7 @@ class ERITHCFactors:
             "storage_nbytes": self.storage_nbytes,
             "audit_only": True,
             "production_enabled": False,
+            "performance_eligible": False,
             "complete_ccsd_residual": False,
             "output_coordinate_space": "amplitude-thc-auxiliary",
             "requires_rr_back_projection": True,
@@ -237,6 +241,8 @@ class ERITHCFactors:
             "core_symmetry_enforced": False,
             "gpu_validation_requires_transfer_counter": True,
             "implicit_host_tensor_transfer": False,
+            "algorithm6_custom_cuda_kernel": False,
+            "algorithm6_python_gemm_audit_endpoint": True,
         }
 
 
@@ -446,4 +452,158 @@ def thc_omega_c_algorithm5(
 
     return _validate_output(
         xp, sigma, "THC Algorithm 5", transfer_counter
+    )
+
+
+def thc_omega_ac_algorithm6_metadata(
+    *, x_block_size: int = 1
+) -> dict[str, Any]:
+    """Describe the actual scheduling contract of the Algorithm 6 endpoint."""
+
+    x_block_size = _positive_block_size(
+        x_block_size, name="x_block_size"
+    )
+    return {
+        "paper": "Hohenstein-2022",
+        "paper_source": "arXiv:2111.11473v1",
+        "paper_algorithm": 6,
+        "paper_equations": [32, 33, 34],
+        "output": "raw-amplitude-thc-core",
+        "output_coordinate_space": "amplitude-thc-auxiliary",
+        "requires_rr_back_projection": True,
+        "complete_ccsd_residual": False,
+        "contribution_convention": "raw-projected-paper-equation",
+        "applies_prefactor": False,
+        "applies_permutation_or_symmetrization": False,
+        "audit_only": True,
+        "production_enabled": False,
+        "performance_eligible": False,
+        "formal_scaling_with_linear_ranks": "O(N^4)",
+        "actual_schedule": (
+            "Python loops over X blocks and ERI-THC rank; NumPy/CuPy "
+            "einsum, GEMM, and unfused elementwise Algorithm-6 line 11"
+        ),
+        "custom_cuda_line11": False,
+        "gpu_performance_claim": False,
+        "x_block_size": x_block_size,
+        "x_blocked_intermediates": ["C", "D", "H", "I"],
+        "full_three_index_A_materialized": True,
+        "full_three_index_B_materialized": False,
+        "eri_B_scheduling": "one I slice at a time",
+        "materializes_dense_t2": False,
+        "materializes_four_index_eri": False,
+        "implicit_host_tensor_transfer": False,
+        "gpu_inputs_must_be_same_device_resident": True,
+        "gpu_validation_scalar_reads_recorded": True,
+        "core_symmetry_enforced": False,
+        "production_requirements": [
+            "fused/custom CUDA kernel for rate-limiting line 11",
+            "A/H workspace plan validated against the HBM budget",
+            "qualified A100 end-to-end timing",
+        ],
+    }
+
+
+def thc_omega_ac_algorithm6(
+    y_occ: Any,
+    y_vir: Any,
+    amplitude_core: Any,
+    eri_factors: ERITHCFactors,
+    *,
+    x_block_size: int = 1,
+    transfer_counter: Any = None,
+):
+    """Evaluate the raw joint Eq. 34 contribution (Appendix Algorithm 6).
+
+    This is a correctness endpoint for the paper's joint ``Omega-A`` and
+    ``Omega-C`` contraction.  It returns an ``(N_thc,N_thc)`` raw core in the
+    amplitude-THC coordinates.  No residual prefactor, permutation,
+    symmetrization, or RR back-projection is applied.
+
+    The implementation follows the appendix index directions exactly:
+
+    ``A[X,i,a] = sum(Y) y_occ[i,Y] y_vir[a,Y] T[Y,X]``
+
+    ``B[I,i,a] = sum(J) x_occ[i,J] x_vir[a,J] Z[I,J]``.
+
+    In particular, neither core is assumed symmetric.  The first and second
+    products accumulated into ``H[X,Y,Z]`` reproduce Eqs. 32 and 33,
+    respectively, for nonsymmetric test cores.
+
+    ``x_block_size`` bounds the first THC dimension of the ``C``, ``D``,
+    ``H``, and ``I`` intermediates.  The complete three-index ``A`` bridge is
+    materialized, while ``B`` is formed one ERI-THC slice at a time.  Dense
+    doubles amplitudes and four-index ERIs are never formed.
+
+    The paper uses a custom CUDA kernel for the rate-limiting line 11.  This
+    audit implementation instead uses Python scheduling plus NumPy/CuPy
+    GEMMs and unfused elementwise operations.  It therefore makes no GPU
+    performance claim and is not eligible for production timing evidence.
+    """
+
+    if not isinstance(eri_factors, ERITHCFactors):
+        raise TypeError("eri_factors must be an ERITHCFactors instance")
+    if transfer_counter is None:
+        transfer_counter = eri_factors.transfer_counter
+    xp, dtype, nocc, nvir, rank = _validate_problem(
+        y_occ, y_vir, amplitude_core, eri_factors, transfer_counter
+    )
+    x_block_size = _positive_block_size(
+        x_block_size, name="x_block_size"
+    )
+    x_occ = eri_factors.x_occ
+    x_vir = eri_factors.x_vir
+    eri_core = eri_factors.core
+
+    # Appendix Algorithm 6, line 1.  ``T[Y,X]`` is deliberate: using
+    # ``T[X,Y]`` is only equivalent when the amplitude core is symmetric.
+    pair_y = (y_occ[:, None, :] * y_vir[None, :, :]).reshape(
+        nocc * nvir, rank
+    )
+    a_xia = (pair_y @ amplitude_core).T.reshape(rank, nocc, nvir)
+    sigma = xp.zeros((rank, rank), dtype=dtype)
+
+    for x0 in range(0, rank, x_block_size):
+        x1 = min(x0 + x_block_size, rank)
+        y_occ_x = y_occ[:, x0:x1]
+        y_vir_x = y_vir[:, x0:x1]
+
+        # Lines 4--5.  The first THC coordinate is blocked; the second spans
+        # all columns of the three-index A bridge.
+        c_ixy = xp.einsum("aX,Yia->iXY", y_vir_x, a_xia)
+        d_axy = xp.einsum("iX,Yia->aXY", y_occ_x, a_xia)
+        h_xyz = xp.zeros((x1 - x0, rank, rank), dtype=dtype)
+
+        # Lines 6--12.  Line 2's B tensor is evaluated a slice at a time so
+        # no Q*O*V allocation is required.  Z[I,J] is not transposed.
+        for eri_index in range(eri_factors.rank):
+            b_ia = (
+                x_occ * eri_core[eri_index][None, :]
+            ) @ x_vir.T
+            e_xy = xp.einsum(
+                "iXY,i->XY", c_ixy, x_occ[:, eri_index]
+            )
+            f_xz = xp.einsum(
+                "aXZ,a->XZ", d_axy, x_vir[:, eri_index]
+            )
+            g_yz = (y_occ.T @ b_ia) @ y_vir
+
+            # Algorithm 6, line 11.  The two summands are Omega-A (Eq. 32)
+            # and Omega-C (Eq. 33), with coefficient +1 for each.
+            h_xyz += (
+                e_xy[:, :, None] * f_xz[:, None, :]
+                + e_xy[:, None, :] * f_xz[:, :, None]
+            ) * g_yz[None, :, :]
+
+        # Lines 13--16.  Two GEMMs per X slice avoid a five-index einsum and
+        # retain the paper's O(N^4) formal operation count for linear ranks.
+        i_xia = xp.empty((x1 - x0, nocc, nvir), dtype=dtype)
+        for local_x in range(x1 - x0):
+            i_xia[local_x] = (
+                y_occ @ h_xyz[local_x].T
+            ) @ y_vir.T
+        sigma[x0:x1] = i_xia.reshape(x1 - x0, nocc * nvir) @ pair_y
+
+    return _validate_output(
+        xp, sigma, "THC Algorithm 6", transfer_counter
     )
