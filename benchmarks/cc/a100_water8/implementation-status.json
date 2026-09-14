@@ -1,6 +1,6 @@
 {
   "schema": "gpu4pyscf.water8.implementation-status.v2",
-  "as_of_utc": "2026-09-14T10:22:53.358587+00:00",
+  "as_of_utc": "2026-09-14T10:39:21.779913+00:00",
   "purpose": "Candid implementation and MTU evidence ledger for the fixed WATER27 H2O8d2d single-A100 CCSD project.",
   "claim_policy": {
     "ten_x_claim_allowed": false,
@@ -18,14 +18,17 @@
     "frozen_baseline_commit": "a89b3ae018d4e82968323ef95645d91adde294aa",
     "feature_worktree": "analysis/research/ccsd/gpu4pyscf-a100-thc-rr",
     "g0_worktree": "analysis/research/ccsd/gpu4pyscf-g0-baseline",
-    "feature_source_state": "reviewed-committed-a2-runtime-rebuild-pending",
+    "feature_source_state": "reviewed-committed-a2-published-qualification-queued",
     "feature_performance_eligible": false,
-    "feature_head_before_ledger_update": "d720a60",
+    "feature_head_before_ledger_update": "0dad84bb22795955676e4ca75297e6a28712ac4e",
     "merged_implementation_commits": {
       "fused_r123": "29ceab6",
       "fixed_gpu_test_node": "56291e7",
-      "grouped_selected_gout_prototype": "d720a60"
-    }
+      "grouped_selected_gout_prototype": "d720a60",
+      "merged_a2_validation_ledger": "0dad84b"
+    },
+    "a2_snapshot_head": "0dad84bb22795955676e4ca75297e6a28712ac4e",
+    "a2_snapshot_excludes_this_ledger_update": true
   },
   "contract": {
     "evidence_state": "source_reported",
@@ -158,16 +161,17 @@
     },
     {
       "id": "feature-candidate-unfrozen",
-      "source_state": "reviewed-committed-development-tree-a2-not-frozen",
+      "source_state": "reviewed-committed-development-tree-superseded-by-a2",
       "formal_source_eligible": false,
       "formal_performance_eligible": false,
-      "use": "final candidate implementation awaiting rebuilt runtime and immutable A2",
-      "missing": "sealed A2 snapshot and MTU A100 validation",
-      "head_before_ledger_update": "d720a60"
+      "use": "development lineage for published A2",
+      "missing": "MTU A100 validation of the published A2 snapshot",
+      "head_before_ledger_update": "0dad84bb22795955676e4ca75297e6a28712ac4e",
+      "superseded_by": "candidate-snapshot-a2-4c23ed1b"
     },
     {
       "id": "candidate-snapshot-c05a95ed",
-      "source_state": "immutable-candidate-v3-runtime-closed-qualification-queued",
+      "source_state": "immutable-candidate-v3-runtime-closed-superseded",
       "deployment_profile": "candidate",
       "tree_sha256": "c05a95ed725cd1da66fb609dccebeaafaa142379a2d245bcdf2adabfed18821a",
       "base_revision_label": "a89b3ae018d4e82968323ef95645d91adde294aa",
@@ -182,7 +186,38 @@
       "formal_source_eligible": true,
       "formal_performance_eligible": false,
       "qualification_job_id": "62600",
-      "note": "This sealed A predates fused-R123, the fixed GPU-test launcher, and grouped-GOUT commits. It is infrastructure qualification evidence only; final-source performance claims require rebuilt A2."
+      "note": "This sealed pre-merge snapshot and jobs 62600/62602/62607 were cancelled after the complete A2 chain was accepted. It remains packaging provenance only.",
+      "qualification_job_state": "CANCELLED",
+      "superseded_by": "candidate-snapshot-a2-4c23ed1b"
+    },
+    {
+      "id": "candidate-snapshot-a2-4c23ed1b",
+      "source_state": "immutable-candidate-v3-runtime-closed-qualification-queued",
+      "deployment_profile": "candidate",
+      "tree_sha256": "4c23ed1bb6a92facc3262119ddb8f7f956c173e391f48f6a736f14b0e10cff82",
+      "source_git_head": "0dad84bb22795955676e4ca75297e6a28712ac4e",
+      "base_revision_label": "a89b3ae018d4e82968323ef95645d91adde294aa",
+      "source_file_count": 997,
+      "runtime_bundle_id": "ba633c2efef78ffb520a2323320820630ad6d676f4388a36b91666f7ae85df6e",
+      "runtime_library_count": 13,
+      "runtime_contract_validated": true,
+      "cuda_version": "12.8",
+      "cuda_architecture": "sm80",
+      "gint_abi_version": 2,
+      "libgint_sha256": "82b1c79dd1f6f7fbc8c00d69915f1930b185c09763b287824f2680286c3e1021",
+      "maximum_stack_bytes": 3600,
+      "read_only": true,
+      "writable_paths": 0,
+      "published_symlinks": 0,
+      "published_special_files": 0,
+      "snapshot_validation_passed": true,
+      "formal_source_eligible": true,
+      "formal_performance_eligible": false,
+      "qualification_job_id": "62612",
+      "gpu_test_job_id": "62613",
+      "grouped_correctness_job_id": "62614",
+      "postqualification_orchestrator_job_id": "62615",
+      "note": "A2 is the exact merged implementation snapshot. Performance eligibility remains false until reference qualification, receipt-bound B release, and the required fixed-node numerical gates complete."
     }
   ],
   "gates": [
@@ -297,8 +332,8 @@
       "id": "G3",
       "name": "tight-direct-cholesky",
       "evidence_state": "local_measured",
-      "state": "reference-runtime-A-queued-grouped-prototype-merged-a2-rebuild-pending",
-      "decision": "rebuild-final-a2-and-run-reference-qualification-plus-grouped-prototype-ab",
+      "state": "final-a2-published-reference-qualification-queued",
+      "decision": "run-reference-qualification-and-grouped-correctness-ab-on-fixed-node",
       "method_class": "integral-factorized",
       "acceptance_table": "I",
       "implemented": [
@@ -313,12 +348,12 @@
       ],
       "limitations": [
         "The reference selected-column kernel repeats GOUT construction for multiple pivots sharing one ket shell task.",
-        "The grouped kernel has CPU contract coverage but no completed nvcc build or A100 numerical/performance result yet.",
-        "The sealed c05a95ed snapshot predates the grouped source and cannot establish final-source performance."
+        "The grouped kernel has a validated sm_80 build and CPU contract coverage but no completed A100 numerical result yet.",
+        "The published A2 snapshot is source/runtime eligible but remains performance-ineligible until job 62612 creates a sealed reference receipt and the B release gate passes."
       ],
       "missing": [
-        "CUDA 12.8 sm_80 build and strict immutable A2 snapshot for the merged source",
-        "A100 reference/grouped selected-count 1/2/8/32 and Rys-7 numerical A/B",
+        "A100 reference qualification from job 62612 and receipt-bound B release gate",
+        "A100 grouped selected-count 1/2/8/32 and Rys-7 correctness-only A/B from jobs 62613/62614",
         "Water2/water4/water8 thresholds 1e-4, 1e-6, and 1e-8 with energy and counterpoise errors"
       ]
     },
@@ -446,9 +481,11 @@
     "python_compile_passed": true,
     "git_diff_and_whitespace_passed": true,
     "candidate_mtu_validation_completed": false,
-    "known_evidence_gap": "The merged source still requires a fresh CUDA 12.8 sm_80 runtime, immutable A2, and compute-1-6 GPU/reference-grouped validation.",
+    "known_evidence_gap": "The published A2 source/runtime still requires compute-1-6 reference qualification, GPU tests, grouped correctness A/B, and receipt-bound B release validation.",
     "fused_r123_review": "no-P0-P1-P2",
-    "grouped_gint_review": "no-P0-P1-P2"
+    "grouped_gint_review": "no-P0-P1-P2",
+    "a2_runtime_build_and_snapshot_validation": "passed",
+    "a2_postqualification_orchestrator_review": "no-P0-P1-P2"
   },
   "mtu_job_ledger": [
     {
@@ -855,13 +892,16 @@
     },
     {
       "job_id": "62600",
-      "scheduler_state": "PENDING",
-      "reason": "Resources",
+      "scheduler_state": "CANCELLED",
+      "reason": "Superseded after the complete A2 chain was accepted by Slurm.",
       "required_node": "compute-1-6",
       "classification": "pre-merge-snapshot-A-gint-qualification",
       "source_track": "candidate-snapshot-c05a95ed",
-      "evidence_state": "hypothesis",
-      "formal_performance_eligible": false
+      "evidence_state": "local_measured",
+      "formal_performance_eligible": false,
+      "cancelled_by_uid": 273689,
+      "cancelled_at_mtu": "2026-09-14T06:35:40",
+      "superseded_by": "62612"
     },
     {
       "job_id": "62601",
@@ -878,22 +918,82 @@
     },
     {
       "job_id": "62602",
-      "scheduler_state": "PENDING",
-      "reason": "ReqNodeNotAvail",
+      "scheduler_state": "CANCELLED",
+      "reason": "Superseded after the complete A2 chain was accepted by Slurm.",
       "required_node": "compute-1-6",
       "classification": "pre-merge-snapshot-A-gpu-tests",
       "source_track": "candidate-snapshot-c05a95ed",
-      "evidence_state": "hypothesis",
-      "formal_performance_eligible": false
+      "evidence_state": "local_measured",
+      "formal_performance_eligible": false,
+      "cancelled_by_uid": 273689,
+      "cancelled_at_mtu": "2026-09-14T06:35:40",
+      "superseded_by": "62613"
     },
     {
       "job_id": "62607",
-      "scheduler_state": "PENDING",
-      "reason": "Dependency",
+      "scheduler_state": "CANCELLED",
+      "reason": "Superseded after the complete A2 chain was accepted by Slurm.",
       "dependency": "afterok:62600",
       "required_node": "compute-1-6",
       "classification": "pre-merge-A-receipt-release-and-smoke-orchestrator",
       "source_track": "candidate-snapshot-c05a95ed",
+      "evidence_state": "local_measured",
+      "formal_performance_eligible": false,
+      "cancelled_by_uid": 273689,
+      "cancelled_at_mtu": "2026-09-14T06:35:40",
+      "superseded_by": "62615"
+    },
+    {
+      "job_id": "62612",
+      "scheduler_state": "PENDING",
+      "reason": "Resources",
+      "required_node": "compute-1-6",
+      "classification": "a2-reference-gint-qualification",
+      "source_track": "candidate-snapshot-a2-4c23ed1b",
+      "source_tree_sha256": "4c23ed1bb6a92facc3262119ddb8f7f956c173e391f48f6a736f14b0e10cff82",
+      "gint_column_kernel": "reference",
+      "evidence_state": "hypothesis",
+      "formal_performance_eligible": false
+    },
+    {
+      "job_id": "62613",
+      "scheduler_state": "PENDING",
+      "reason": "ReqNodeNotAvail",
+      "required_node": "compute-1-6",
+      "classification": "a2-gpu-test-suite",
+      "source_track": "candidate-snapshot-a2-4c23ed1b",
+      "source_tree_sha256": "4c23ed1bb6a92facc3262119ddb8f7f956c173e391f48f6a736f14b0e10cff82",
+      "environment": {
+        "GPU4PYSCF_TEST_GROUPED_GINT": "1"
+      },
+      "evidence_state": "hypothesis",
+      "formal_performance_eligible": false
+    },
+    {
+      "job_id": "62614",
+      "scheduler_state": "PENDING",
+      "reason": "Dependency",
+      "dependency": "afterok:62612",
+      "required_node": "compute-1-6",
+      "classification": "a2-grouped-gint-correctness-only-ab",
+      "source_track": "candidate-snapshot-a2-4c23ed1b",
+      "source_tree_sha256": "4c23ed1bb6a92facc3262119ddb8f7f956c173e391f48f6a736f14b0e10cff82",
+      "gint_column_kernel": "grouped",
+      "expected_nonzero_gate_exit": true,
+      "performance_eligible": false,
+      "evidence_state": "hypothesis",
+      "formal_performance_eligible": false
+    },
+    {
+      "job_id": "62615",
+      "scheduler_state": "PENDING",
+      "reason": "Dependency",
+      "dependency": "afterok:62612",
+      "required_node": "compute-1-6",
+      "classification": "a2-receipt-promotion-release-and-bounded-smoke-orchestrator",
+      "source_track": "candidate-snapshot-a2-4c23ed1b",
+      "source_tree_sha256": "4c23ed1bb6a92facc3262119ddb8f7f956c173e391f48f6a736f14b0e10cff82",
+      "script_sha256": "8768b9228dddcbd12482864b820568e3e9de5b117986f691ece7eae69c02de1b",
       "evidence_state": "hypothesis",
       "formal_performance_eligible": false
     }
@@ -943,6 +1043,33 @@
       "sto3g_direct_cd_reconstruction_max_abs_error": 1.874889132835733e-14,
       "performance_eligible": false,
       "reason": "Historical partial evidence lacked a sealed final-source runtime qualification and did not measure the current grouped prototype."
+    },
+    "a2_candidate_publication": {
+      "evidence_state": "local_measured",
+      "source_tree_sha256": "4c23ed1bb6a92facc3262119ddb8f7f956c173e391f48f6a736f14b0e10cff82",
+      "source_file_count": 997,
+      "source_git_head": "0dad84bb22795955676e4ca75297e6a28712ac4e",
+      "snapshot_root": "/mnt/mridata/vxu/thu-likun/hanhaozhi/agent-ccsd-a100-thc-rr-20260913/snapshots/4c23ed1bb6a92facc3262119ddb8f7f956c173e391f48f6a736f14b0e10cff82",
+      "snapshot_manifest_sha256": "dc36de752140e01b2cf210a3256a90b7068b4d3c19a3ec3506128c0669df9c94",
+      "runtime_bundle_id": "ba633c2efef78ffb520a2323320820630ad6d676f4388a36b91666f7ae85df6e",
+      "runtime_contract_validation_sha256": "e58221642166300e951f880e2ce3ba44715f1ae6e69a6bf006e73514cd767615",
+      "runtime_sidecar_sha256": "e5787e8669c649772dae9fdccd14a1e9d5f335d1702ef36c5fca76c1769d0423",
+      "runtime_build_verification_sha256": "9d17b9cfc2ac4c7d0835a4825bbf58019ace76d1d3f6de96cfa7bc07171962eb",
+      "libgint_sha256": "82b1c79dd1f6f7fbc8c00d69915f1930b185c09763b287824f2680286c3e1021",
+      "validation": {
+        "valid": true,
+        "read_only": true,
+        "runtime_library_count": 13,
+        "maximum_stack_bytes": 3600
+      },
+      "local_receipts": {
+        "build_input": "output/mtu-build-input-20260914-a2.json",
+        "gint_build": "output/mtu-gint-build-20260914-a2.json",
+        "runtime_contract": "output/mtu-runtime-contract-validation-20260914-a2.json",
+        "deployment": "output/mtu-deploy-a2-20260914.json",
+        "snapshot_validation": "output/mtu-snapshot-a2-validation-20260914.json",
+        "job_registry": "output/mtu-jobs-20260914.json"
+      }
     }
   },
   "accuracy_tables": {
@@ -1068,9 +1195,10 @@
   "update_protocol": {
     "running_jobs": [],
     "pending_jobs": [
-      "62600 pre-merge GINT qualification",
-      "62602 pre-merge GPU tests",
-      "62607 afterok receipt/promotion orchestrator"
+      "62612 A2 reference GINT qualification",
+      "62613 A2 fixed-node GPU tests",
+      "62614 afterok grouped GINT correctness-only A/B",
+      "62615 afterok receipt/promotion/release/bounded-smoke orchestrator"
     ],
     "on_job_completion": [
       "Sync raw stdout/stderr, result JSON, checkpoint, topology record, and Slurm accounting.",
@@ -1080,12 +1208,17 @@
       "Do not compute a median, CV, or speedup until the required matched repetitions exist."
     ],
     "next_gate_actions": [
-      "Freeze the merged source, rebuild its CUDA 12.8 sm_80 runtime, and publish strict candidate A2.",
-      "Submit A2 reference qualification and GPU tests on compute-1-6 before superseding the pre-merge queue.",
-      "Run grouped/reference selected-column A/B as correctness-only prototype evidence.",
-      "After A2 qualification, issue its receipt, promote B, and run the release gate.",
-      "Run bounded direct-CD water2 lifecycle smoke, then uncapped water2 correctness.",
+      "Wait for fixed-node A2 jobs 62612 and 62613; do not substitute another node for performance evidence.",
+      "After job 62612 passes, issue the sealed receipt, promote B, and run the reference release gate through job 62615.",
+      "Treat grouped job 62614 as correctness-only evidence; its fail-closed nonzero release-gate exit is expected.",
+      "Accept the bounded direct-CD water2 lifecycle smoke before submitting an uncapped water2 correctness run.",
       "Advance to water4 RR/FNO/THC grids only after each preceding gate passes."
+    ],
+    "superseded_jobs": [
+      "62600 pre-merge GINT qualification: cancelled",
+      "62601 unpinned GPU tests: failed and excluded",
+      "62602 pre-merge fixed-node GPU tests: cancelled",
+      "62607 pre-merge orchestrator: cancelled"
     ]
   }
 }
