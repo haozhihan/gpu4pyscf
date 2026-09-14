@@ -32,6 +32,51 @@ VALIDATION_ATOL = 1e-11
 VALIDATION_RTOL = 1e-11
 
 
+def _assert_paper_algorithm_scope(metadata):
+    """Guard partial paper kernels against production-complete claims."""
+
+    assert metadata["paper_algorithms_1_10_complete"] is False
+    assert metadata["production_direct_paper_residual_enabled"] is False
+    assert metadata["production_direct_paper_residual_eligible"] is False
+    assert metadata["production_eligible"] is False
+    assert metadata["performance_eligible"] is False
+
+    replacement = metadata[
+        "current_rr_coarse_graph_replacement_algorithms"
+    ]
+    audit_only = metadata["audit_only_not_wired_algorithms"]
+    assert replacement == [1, 2, 3]
+    assert audit_only == [4, 5, 6, 7, 8, 9, 10]
+    assert set(replacement).isdisjoint(audit_only)
+    assert sorted(replacement + audit_only) == list(range(1, 11))
+    assert metadata["paper_algorithm_scope"] == {
+        "current_rr_coarse_graph_replacement": [1, 2, 3],
+        "audit_only_not_wired_into_production_residual": [
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+        ],
+    }
+
+
+def _assert_rr_coarse_only_equation_scope(metadata):
+    """Guard the legacy completeness key against a broader paper claim."""
+
+    assert metadata["complete_equation_graph"] is True
+    assert metadata["complete_equation_graph_scope"] == (
+        "current-rr-coarse-residual-graph"
+    )
+    assert metadata["complete_equation_graph_semantics"] == (
+        "complete-current-rr-coarse-graph;"
+        "does-not-claim-paper-algorithms-1-10"
+    )
+    _assert_paper_algorithm_scope(metadata)
+
+
 def _problem(seed=401, nocc=2, nvir=3, naux=3, rank=4):
     rng = np.random.default_rng(seed)
     nmo = nocc + nvir
@@ -177,6 +222,7 @@ def test_shared_decomposition_matches_dense_arbitrary_pair_and_recombines():
     assert metadata["fused_contraction_implementation"] is False
     assert metadata["complete_rr_evaluated_separately"] is True
     assert metadata["performance_eligible"] is False
+    _assert_rr_coarse_only_equation_scope(metadata)
 
 
 def test_zero_t1_t2_isolates_bare_algorithm_2_and_preserves_identity():
@@ -319,6 +365,8 @@ def test_fused_r123_matches_independent_terms_and_transforms_each_block_once(
         fused.thc.sigma_thc, thc_reference.sigma_thc, atol=5e-10
     )
     metadata = fused.metadata()
+    _assert_paper_algorithm_scope(metadata)
+    assert "complete_equation_graph" not in metadata
     assert metadata["fused_contraction_implementation"] is True
     assert metadata["r123_evaluation_count"] == 2
     assert metadata["coarse_r123_diagram_partition_fused"] is False
@@ -413,7 +461,7 @@ def test_full_pair_thc_endpoint_reproduces_complete_rr_numerator():
     np.testing.assert_allclose(hybrid.replacement_delta_core, 0.0, atol=2e-10)
     np.testing.assert_allclose(hybrid.core, complete.core, atol=2e-10)
     metadata = hybrid.metadata()
-    assert metadata["complete_equation_graph"] is True
+    _assert_rr_coarse_only_equation_scope(metadata)
     assert metadata["canonical_equation"] is False
     assert metadata["materialized_dense_t2"] is False
     assert metadata["replacement_applied"] is True
@@ -616,8 +664,10 @@ def test_full_pair_hybrid_jacobi_matches_rr_engine():
         replacement_validation_atol=VALIDATION_ATOL,
         replacement_validation_rtol=VALIDATION_RTOL,
     )
-    assert thc.metadata()["replacement_applied"] is False
-    assert thc.metadata()["replacement_application_count"] == 0
+    initial_metadata = thc.metadata()
+    _assert_rr_coarse_only_equation_scope(initial_metadata)
+    assert initial_metadata["replacement_applied"] is False
+    assert initial_metadata["replacement_application_count"] == 0
     expected = rr.jacobi(t1, doubles)
     observed = thc.jacobi(t1, doubles)
     np.testing.assert_allclose(observed.t1, expected.t1, atol=2e-10)
@@ -631,14 +681,15 @@ def test_full_pair_hybrid_jacobi_matches_rr_engine():
         atol=3e-10,
     )
     assert observed.doubles_equation.materialized_dense_t2 is False
-    assert thc.metadata()["performance_eligible"] is False
-    assert thc.metadata()["replacement_applied"] is True
-    assert thc.metadata()["replacement_application_count"] == 1
-    assert thc.metadata()["r123_application_count"] == 1
-    assert thc.metadata()["r123_evaluation_count"] == 2
-    assert thc.metadata()["exact_r123_subtraction_count"] == 1
-    assert thc.metadata()["fused_contraction_implementation"] is True
-    assert thc.metadata()["complete_rr_evaluated_separately"] is False
+    final_metadata = thc.metadata()
+    _assert_rr_coarse_only_equation_scope(final_metadata)
+    assert final_metadata["replacement_applied"] is True
+    assert final_metadata["replacement_application_count"] == 1
+    assert final_metadata["r123_application_count"] == 1
+    assert final_metadata["r123_evaluation_count"] == 2
+    assert final_metadata["exact_r123_subtraction_count"] == 1
+    assert final_metadata["fused_contraction_implementation"] is True
+    assert final_metadata["complete_rr_evaluated_separately"] is False
 
 
 def test_zero_hybrid_kernel_converges_and_reports_hybrid_residual():
@@ -688,7 +739,7 @@ def test_zero_hybrid_kernel_converges_and_reports_hybrid_residual():
     assert engine.metrics.metadata["replacement_application_count"] == 2
     assert engine.metrics.metadata["r123_application_count"] == 2
     assert engine.metrics.metadata["r123_evaluation_count"] == 4
-    assert engine.metrics.metadata["performance_eligible"] is False
+    _assert_rr_coarse_only_equation_scope(engine.metrics.metadata)
 
 
 def test_engine_rejects_factors_from_another_projector():

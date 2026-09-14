@@ -81,6 +81,51 @@ def _same_backend(reference: Any, *values: Any) -> bool:
     return all(_array_module(value) is xp for value in values)
 
 
+def _paper_algorithm_scope_metadata() -> dict[str, Any]:
+    """Describe which paper algorithms are wired into this lifecycle."""
+
+    return {
+        "paper_algorithms_1_10_complete": False,
+        "production_direct_paper_residual_enabled": False,
+        "production_direct_paper_residual_eligible": False,
+        "current_rr_coarse_graph_replacement_algorithms": [1, 2, 3],
+        "audit_only_not_wired_algorithms": [4, 5, 6, 7, 8, 9, 10],
+        "paper_algorithm_scope": {
+            "current_rr_coarse_graph_replacement": [1, 2, 3],
+            "audit_only_not_wired_into_production_residual": [
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+            ],
+        },
+        "production_eligible": False,
+    }
+
+
+def _equation_scope_metadata() -> dict[str, Any]:
+    """Scope the legacy complete-graph key to the current RR graph.
+
+    ``complete_equation_graph`` predates the direct Algorithms 1--10 audit
+    kernels.  Keep that compatibility key, but bind it to the complete
+    *current RR coarse graph* so it cannot be read as a claim that the paper's
+    direct residual is wired into the iteration lifecycle.
+    """
+
+    return {
+        "complete_equation_graph": True,
+        "complete_equation_graph_scope": "current-rr-coarse-residual-graph",
+        "complete_equation_graph_semantics": (
+            "complete-current-rr-coarse-graph;"
+            "does-not-claim-paper-algorithms-1-10"
+        ),
+        **_paper_algorithm_scope_metadata(),
+    }
+
+
 @dataclass(frozen=True)
 class RRResidual123Decomposition:
     """Exact RR doubles split at the paper Algorithms 1--3 boundary.
@@ -167,6 +212,7 @@ class RRResidual123Decomposition:
     def metadata(self) -> dict[str, Any]:
         return {
             "equation_identity": "complete_rr = exact_r123 + complement",
+            **_equation_scope_metadata(),
             "construction": self.construction,
             "paper": "Hohenstein-2022",
             "paper_equations": [28, 29, 31],
@@ -341,7 +387,7 @@ class THCHybridDoublesResult:
     def metadata(self) -> dict[str, Any]:
         return {
             "equation": "rr-r123-complement-plus-thc-r123",
-            "complete_equation_graph": True,
+            **_equation_scope_metadata(),
             "canonical_equation": False,
             "replacement_formula": (
                 "rr_complement + backproject(thc_algorithms_1_3)"
@@ -448,6 +494,7 @@ class FusedR123Construction:
 
     def metadata(self) -> dict[str, Any]:
         return {
+            **_paper_algorithm_scope_metadata(),
             "fused_contraction_implementation": bool(
                 self.fused_contraction_implementation
             ),
@@ -991,7 +1038,7 @@ class THCRRCCSDIterationEngine(RRCCSDIterationEngine):
         return {
             "engine": "THCRRCCSDIterationEngine",
             "equation": "rr-r123-complement-plus-thc-r123",
-            "complete_equation_graph": True,
+            **_equation_scope_metadata(),
             "canonical_equation": False,
             "integrals": self.integrals.metadata(),
             "projector_rank": self.projector.rank,
