@@ -37,7 +37,7 @@ case "${DEPLOYMENT_PROFILE}" in
 esac
 
 if [[ -z "${MTU_HOST_NAME}" || "${MTU_HOST_NAME}" == -* \
-    || ! "${MTU_HOST_NAME}" =~ ^[A-Za-z0-9_.:@%+\[\]-]+$ ]]; then
+    || ! "${MTU_HOST_NAME}" =~ ^[A-Za-z0-9_.:@%+-]+$ ]]; then
   echo "MTU_HOST_NAME is not a safe SSH host token" >&2
   exit 2
 fi

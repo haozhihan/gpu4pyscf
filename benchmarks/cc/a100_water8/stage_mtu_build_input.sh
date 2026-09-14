@@ -38,7 +38,7 @@ SOURCE_INO=""
 validate_ssh_host() {
   local value="$1"
   if [[ -z "${value}" || "${value}" == -* \
-      || ! "${value}" =~ ^[A-Za-z0-9_.:@%+\[\]-]+$ ]]; then
+      || ! "${value}" =~ ^[A-Za-z0-9_.:@%+-]+$ ]]; then
     echo "MTU_HOST_NAME is not a safe SSH host token" >&2
     return 2
   fi

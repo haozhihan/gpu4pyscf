@@ -39,6 +39,35 @@ def test_stage_script_is_valid_bash() -> None:
     subprocess.run(["bash", "-n", str(SCRIPT)], check=True)
 
 
+def test_safe_ssh_host_regex_is_bash_32_compatible() -> None:
+    regex = "^[A-Za-z0-9_.:@%+-]+$"
+    assert regex in _script()
+    deploy = (ROOT / "deploy_mtu_snapshot.sh").read_text(encoding="utf-8")
+    assert regex in deploy
+    for token in ("mtu", "user@mtu", "host-name.example:22"):
+        completed = subprocess.run(
+            [
+                "bash",
+                "-c",
+                '[[ "$1" =~ ^[A-Za-z0-9_.:@%+-]+$ ]]',
+                "host-regex-test",
+                token,
+            ],
+        )
+        assert completed.returncode == 0
+    for token in ("-oProxyCommand=bad", "bad host", "bad;host", "[::1]"):
+        completed = subprocess.run(
+            [
+                "bash",
+                "-c",
+                '[[ "$1" =~ ^[A-Za-z0-9_.:@%+-]+$ ]]',
+                "host-regex-test",
+                token,
+            ],
+        )
+        assert completed.returncode != 0
+
+
 def test_guard_digest_supports_a_local_python_path_with_spaces(
     tmp_path: Path,
 ) -> None:
