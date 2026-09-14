@@ -165,6 +165,27 @@ def _write_publication_attestation(
     path.chmod(0o444)
 
 
+def _rewrite_publication_attestation_identity(
+    target: Path, *, device: object | None = None, inode: object | None = None
+) -> None:
+    path = target.parent / (
+        f"{target.name}{SNAPSHOT.PUBLICATION_ATTESTATION_SUFFIX}"
+    )
+    path.chmod(0o644)
+    value = json.loads(path.read_text(encoding="utf-8"))
+    identity = value["published_directory_identity"]
+    if device is not None:
+        identity["device"] = device
+    if inode is not None:
+        identity["inode"] = inode
+    value.pop("attestation_sha256")
+    value["attestation_sha256"] = SNAPSHOT._canonical_json_sha256(value)
+    path.write_text(
+        json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    path.chmod(0o444)
+
+
 def _upgrade_to_v3(source: Path) -> Path:
     manifest_path = source.parent / "manifest.json"
     inventory = NORMALIZER.inspect_source(source)
@@ -842,6 +863,81 @@ def test_v3_publication_attestation_is_required_and_bound(tmp_path: Path, tamper
     reasons = " ".join(evidence["reasons"])
     assert "publication attestation" in reasons
     _make_writable(source)
+
+
+def test_v3_publication_attestation_device_is_portable_diagnostic(
+    tmp_path: Path,
+):
+    task, source = _installed_snapshot(tmp_path)
+    _upgrade_to_v3(source)
+    observed = source.parent.stat()
+    attested_device = observed.st_dev + 1
+    _rewrite_publication_attestation_identity(
+        source.parent, device=attested_device
+    )
+    try:
+        evidence = SNAPSHOT.validate_snapshot(source, expected_task_root=task)
+        assert evidence["valid"] is True
+        identity = evidence["publication_attestation_directory_identity"]
+        assert identity == {
+            "attested": {
+                "device": attested_device,
+                "inode": observed.st_ino,
+            },
+            "observed": {
+                "device": observed.st_dev,
+                "inode": observed.st_ino,
+            },
+            "device_match": False,
+            "inode_match": True,
+        }
+    finally:
+        _make_writable(source)
+
+
+def test_v3_publication_attestation_inode_mismatch_is_rejected(
+    tmp_path: Path,
+):
+    task, source = _installed_snapshot(tmp_path)
+    _upgrade_to_v3(source)
+    observed = source.parent.stat()
+    _rewrite_publication_attestation_identity(
+        source.parent, inode=observed.st_ino + 1
+    )
+    try:
+        evidence = SNAPSHOT.validate_snapshot(source, expected_task_root=task)
+        assert evidence["valid"] is False
+        assert (
+            "publication attestation directory identity mismatch"
+            in evidence["reasons"]
+        )
+        identity = evidence["publication_attestation_directory_identity"]
+        assert identity["device_match"] is True
+        assert identity["inode_match"] is False
+    finally:
+        _make_writable(source)
+
+
+def test_v3_publication_attestation_invalid_identity_cannot_match(
+    tmp_path: Path,
+):
+    task, source = _installed_snapshot(tmp_path)
+    _upgrade_to_v3(source)
+    _rewrite_publication_attestation_identity(
+        source.parent, device="invalid-device"
+    )
+    try:
+        evidence = SNAPSHOT.validate_snapshot(source, expected_task_root=task)
+        assert evidence["valid"] is False
+        assert (
+            "publication attestation directory identity is invalid"
+            in evidence["reasons"]
+        )
+        identity = evidence["publication_attestation_directory_identity"]
+        assert identity["device_match"] is False
+        assert identity["inode_match"] is True
+    finally:
+        _make_writable(source)
 
 
 def test_stable_mutable_snapshot_is_rejected(tmp_path: Path):

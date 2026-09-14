@@ -303,10 +303,19 @@ def _read_publication_attestation(
     try:
         snapshot_info = snapshot.lstat()
         identity = value.get("published_directory_identity")
-        if identity != {
-            "device": snapshot_info.st_dev,
-            "inode": snapshot_info.st_ino,
-        }:
+        if (
+            not isinstance(identity, dict)
+            or set(identity) != {"device", "inode"}
+            or type(identity.get("device")) is not int
+            or identity["device"] < 0
+            or type(identity.get("inode")) is not int
+            or identity["inode"] <= 0
+        ):
+            errors.append("publication attestation directory identity is invalid")
+        # st_dev identifies a mount within the observing client's namespace, so
+        # its authenticated publication value is diagnostic across hosts.  The
+        # inode remains the portable directory binding for this shared tree.
+        elif identity["inode"] != snapshot_info.st_ino:
             errors.append("publication attestation directory identity mismatch")
     except OSError as exc:
         errors.append(f"publication attestation directory identity failed: {exc!r}")
@@ -1035,6 +1044,7 @@ def validate_snapshot(
     manifest_bytes = b""
     publication_attestation: dict[str, Any] | None = None
     publication_attestation_file_sha256: str | None = None
+    publication_attestation_directory_identity: dict[str, Any] | None = None
     deployment_profile: str | None = None
     validation_task_root = (
         _lexical_absolute_path(expected_task_root)
@@ -1132,6 +1142,48 @@ def validate_snapshot(
                 policy=publication_policy,
             )
             reasons.extend(attestation_errors)
+            if publication_attestation is not None:
+                identity = publication_attestation.get(
+                    "published_directory_identity"
+                )
+                try:
+                    observed = snapshot.lstat()
+                except OSError:
+                    observed = None
+                attested_device = (
+                    identity.get("device") if isinstance(identity, dict) else None
+                )
+                attested_inode = (
+                    identity.get("inode") if isinstance(identity, dict) else None
+                )
+                observed_device = observed.st_dev if observed is not None else None
+                observed_inode = observed.st_ino if observed is not None else None
+                device_match = (
+                    type(attested_device) is int
+                    and attested_device >= 0
+                    and type(observed_device) is int
+                    and observed_device >= 0
+                    and attested_device == observed_device
+                )
+                inode_match = (
+                    type(attested_inode) is int
+                    and attested_inode > 0
+                    and type(observed_inode) is int
+                    and observed_inode > 0
+                    and attested_inode == observed_inode
+                )
+                publication_attestation_directory_identity = {
+                    "attested": {
+                        "device": attested_device,
+                        "inode": attested_inode,
+                    },
+                    "observed": {
+                        "device": observed_device,
+                        "inode": observed_inode,
+                    },
+                    "device_match": device_match,
+                    "inode_match": inode_match,
+                }
             if publication_attestation is not None and not attestation_errors:
                 publication_attestation_file_sha256 = _file_sha256(
                     snapshot.parent
@@ -1432,6 +1484,9 @@ def validate_snapshot(
         ),
         "publication_attestation": publication_attestation,
         "publication_attestation_file_sha256": publication_attestation_file_sha256,
+        "publication_attestation_directory_identity": (
+            publication_attestation_directory_identity
+        ),
         "expected_base_revision": expected_base_revision,
         "expected_deployment_profile": expected_deployment_profile,
         "canonical_pristine_required": require_canonical_pristine,
