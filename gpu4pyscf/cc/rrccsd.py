@@ -334,6 +334,7 @@ class RRCCSD(ccsd_incore.CCSD):
         "projected_jacobi_update_norm",
         "full_space_jacobi_update_norm",
         "representation_residual",
+        "rr_history",
         "full_space_diagnostic_metadata",
         "run_metrics",
     }

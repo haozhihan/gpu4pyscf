@@ -32,6 +32,7 @@ from gpu4pyscf.cc.thc_rrccsd import THCRRCCSD
 
 def test_rrccsd_selected_column_kernel_selector_fails_closed():
     assert "gint_column_kernel" in RRCCSD._keys
+    assert "rr_history" in RRCCSD._keys
     with pytest.raises(ValueError, match="must be 'reference' or 'grouped'"):
         RRCCSD(
             None,
