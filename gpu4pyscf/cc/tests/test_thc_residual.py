@@ -2,6 +2,7 @@
 
 import numpy as np
 import pytest
+import gpu4pyscf.cc.thc_residual as thc_residual_module
 
 from gpu4pyscf.cc.thc_residual import (
     pair_factor_residual_algorithms_1_3,
@@ -156,6 +157,53 @@ def test_general_pair_factor_reduces_to_each_thc_algorithm():
     np.testing.assert_allclose(generic.algorithm_3, thc.algorithm_3, atol=2e-9)
     np.testing.assert_allclose(generic.sigma_pair, thc.sigma_thc, atol=3e-9)
     assert generic.metadata()["materialized_dense_t2"] is False
+    assert generic.algorithm_1_provenance is None
+    assert generic.algorithm_3_provenance is None
+    assert thc.algorithm_1_provenance is None
+    assert thc.algorithm_3_provenance is None
+    assert generic.metadata()["provenance_decomposition"] is False
+    assert generic.metadata()["provenance_available"] is False
+    assert thc.metadata()["provenance_decomposition"] is False
+    assert thc.metadata()["algorithm_1_provenance"] == []
+
+
+def test_provenance_audit_is_opt_in(monkeypatch):
+    t1, _factors, loo, lov, lvv, y_occ, y_vir, core = _problem(214)
+    pair_factor = np.einsum("iX,aX->iaX", y_occ, y_vir).reshape(
+        t1.size, core.shape[0]
+    )
+
+    def forbidden_audit(*_args, **_kwargs):
+        raise AssertionError("provenance audit was evaluated by default")
+
+    monkeypatch.setattr(
+        thc_residual_module,
+        "_pair_factor_provenance_algorithms_1_3_block",
+        forbidden_audit,
+    )
+    pair_result = pair_factor_residual_algorithms_1_3(
+        pair_factor,
+        core,
+        t1,
+        loo,
+        lov,
+        lvv,
+        nocc=t1.shape[0],
+        nvir=t1.shape[1],
+        auxiliary_block_size=2,
+    )
+    thc_result = thc_residual_algorithms_1_3(
+        y_occ,
+        y_vir,
+        core,
+        t1,
+        loo,
+        lov,
+        lvv,
+        auxiliary_block_size=2,
+    )
+    assert pair_result.algorithm_1_provenance is None
+    assert thc_result.algorithm_1_provenance is None
 
 
 def test_arbitrary_rr_pair_factor_matches_dense_equations_term_by_term():
@@ -216,6 +264,7 @@ def test_arbitrary_rr_pair_factor_matches_dense_equations_term_by_term():
         nocc=nocc,
         nvir=nvir,
         auxiliary_block_size=2,
+        record_provenance=True,
     )
     np.testing.assert_allclose(observed.algorithm_1, expected[0], atol=2e-9)
     np.testing.assert_allclose(observed.algorithm_2, expected[1], atol=2e-9)
@@ -253,6 +302,7 @@ def test_thc_provenance_preserves_separable_endpoint_and_records_metadata():
         lov,
         lvv,
         auxiliary_block_size=2,
+        record_provenance=True,
     )
     np.testing.assert_allclose(
         sum(observed.algorithm_1_provenance.values()), observed.algorithm_1,
@@ -264,12 +314,35 @@ def test_thc_provenance_preserves_separable_endpoint_and_records_metadata():
     )
     metadata = observed.metadata()
     assert metadata["provenance_decomposition"] is True
+    assert metadata["provenance_available"] is True
+    assert metadata["provenance_largest_intermediate_nbytes"] > 0
     assert metadata["algorithm_1_provenance"] == [
         "LL", "LT1", "T1L", "T1T1"
     ]
     assert metadata["algorithm_3_provenance"] == [
         "Loo_Lvv", "Loo_T1vv", "T1oo_Lvv", "T1oo_T1vv"
     ]
+
+    zero_t1 = np.zeros_like(t1)
+    zero_t1_result = thc_residual_algorithms_1_3(
+        y_occ,
+        y_vir,
+        core,
+        zero_t1,
+        loo,
+        lov,
+        lvv,
+        auxiliary_block_size=2,
+        record_provenance=True,
+    )
+    for name in ("LT1", "T1L", "T1T1"):
+        np.testing.assert_allclose(
+            zero_t1_result.algorithm_1_provenance[name], 0.0, atol=1e-13
+        )
+    for name in ("Loo_T1vv", "T1oo_Lvv", "T1oo_T1vv"):
+        np.testing.assert_allclose(
+            zero_t1_result.algorithm_3_provenance[name], 0.0, atol=1e-13
+        )
 
 
 def test_streamed_algorithms_and_rr_back_projection():
@@ -299,6 +372,10 @@ def test_streamed_algorithms_and_rr_back_projection():
         project_thc_residual_to_rr(expected, tau), expected_rr
     )
     assert result.metadata()["complete_ccsd_residual"] is False
+    assert result.algorithm_1_provenance is None
+    assert result.algorithm_3_provenance is None
+    assert result.metadata()["provenance_decomposition"] is False
+    assert result.metadata()["provenance_largest_intermediate_nbytes"] == 0
 
 
 def test_gpu_thc_algorithms_stay_on_device():
@@ -311,7 +388,15 @@ def test_gpu_thc_algorithms_stay_on_device():
     values = _problem(205)
     t1, _factors, loo, lov, lvv, y_occ, y_vir, core = values
     cpu = thc_residual_algorithms_1_3(
-        y_occ, y_vir, core, t1, loo, lov, lvv, auxiliary_block_size=2
+        y_occ,
+        y_vir,
+        core,
+        t1,
+        loo,
+        lov,
+        lvv,
+        auxiliary_block_size=2,
+        record_provenance=True,
     )
     gpu = thc_residual_algorithms_1_3(
         cp.asarray(y_occ),
@@ -322,6 +407,7 @@ def test_gpu_thc_algorithms_stay_on_device():
         cp.asarray(lov),
         cp.asarray(lvv),
         auxiliary_block_size=2,
+        record_provenance=True,
     )
     assert isinstance(gpu.sigma_thc, cp.ndarray)
     cp.testing.assert_allclose(
@@ -369,6 +455,7 @@ def test_gpu_general_pair_reference_stays_on_device():
         nocc=nocc,
         nvir=nvir,
         auxiliary_block_size=2,
+        record_provenance=True,
     )
     gpu = pair_factor_residual_algorithms_1_3(
         cp.asarray(pair_factor),
@@ -380,6 +467,7 @@ def test_gpu_general_pair_reference_stays_on_device():
         nocc=nocc,
         nvir=nvir,
         auxiliary_block_size=2,
+        record_provenance=True,
     )
     assert isinstance(gpu.sigma_pair, cp.ndarray)
     cp.testing.assert_allclose(

@@ -95,6 +95,7 @@ class THCResidual123Result:
     largest_intermediate_nbytes: int
     algorithm_1_provenance: Optional[dict[str, Any]] = None
     algorithm_3_provenance: Optional[dict[str, Any]] = None
+    provenance_largest_intermediate_nbytes: int = 0
 
     def to_rr(self, tau: Any):
         """Return ``tau @ sigma_thc @ tau.T`` in the RR working basis."""
@@ -102,6 +103,10 @@ class THCResidual123Result:
         return project_thc_residual_to_rr(self.sigma_thc, tau)
 
     def metadata(self) -> dict[str, Any]:
+        available = (
+            self.algorithm_1_provenance is not None
+            and self.algorithm_3_provenance is not None
+        )
         return {
             "paper": "Hohenstein-2022",
             "equations": [28, 29, 31],
@@ -112,11 +117,23 @@ class THCResidual123Result:
             "largest_intermediate_nbytes": int(self.largest_intermediate_nbytes),
             "materialized_dense_t2": False,
             "materialized_four_index_eri": False,
-            "provenance_decomposition": True,
-            "algorithm_1_provenance": ["LL", "LT1", "T1L", "T1T1"],
-            "algorithm_3_provenance": [
-                "Loo_Lvv", "Loo_T1vv", "T1oo_Lvv", "T1oo_T1vv"
-            ],
+            "provenance_decomposition": available,
+            "provenance_available": available,
+            "provenance_largest_intermediate_nbytes": int(
+                self.provenance_largest_intermediate_nbytes
+            ),
+            "largest_intermediate_nbytes_scope": "aggregate-residual-path",
+            "provenance_audit_memory_scope": "reported-separately",
+            "algorithm_1_provenance": (
+                list(self.algorithm_1_provenance)
+                if self.algorithm_1_provenance is not None
+                else []
+            ),
+            "algorithm_3_provenance": (
+                list(self.algorithm_3_provenance)
+                if self.algorithm_3_provenance is not None
+                else []
+            ),
         }
 
 
@@ -142,8 +159,13 @@ class PairFactorResidual123Result:
     largest_intermediate_nbytes: int
     algorithm_1_provenance: Optional[dict[str, Any]] = None
     algorithm_3_provenance: Optional[dict[str, Any]] = None
+    provenance_largest_intermediate_nbytes: int = 0
 
     def metadata(self) -> dict[str, Any]:
+        available = (
+            self.algorithm_1_provenance is not None
+            and self.algorithm_3_provenance is not None
+        )
         return {
             "paper": "Hohenstein-2022",
             "equations": [28, 29, 31],
@@ -159,11 +181,23 @@ class PairFactorResidual123Result:
             ),
             "materialized_dense_t2": False,
             "materialized_four_index_eri": False,
-            "provenance_decomposition": True,
-            "algorithm_1_provenance": ["LL", "LT1", "T1L", "T1T1"],
-            "algorithm_3_provenance": [
-                "Loo_Lvv", "Loo_T1vv", "T1oo_Lvv", "T1oo_T1vv"
-            ],
+            "provenance_decomposition": available,
+            "provenance_available": available,
+            "provenance_largest_intermediate_nbytes": int(
+                self.provenance_largest_intermediate_nbytes
+            ),
+            "largest_intermediate_nbytes_scope": "aggregate-residual-path",
+            "provenance_audit_memory_scope": "reported-separately",
+            "algorithm_1_provenance": (
+                list(self.algorithm_1_provenance)
+                if self.algorithm_1_provenance is not None
+                else []
+            ),
+            "algorithm_3_provenance": (
+                list(self.algorithm_3_provenance)
+                if self.algorithm_3_provenance is not None
+                else []
+            ),
         }
 
 
@@ -431,9 +465,6 @@ def _pair_factor_algorithms_1_3_block(
         provenance = _pair_factor_provenance_algorithms_1_3_block(
             pair_factor, core, transformed, loo, lvv, nocc, nvir
         )
-    elif loo is not None or lvv is not None:
-        if loo is None or lvv is None:
-            raise ValueError("loo and lvv are required together for provenance")
     if return_provenance:
         return part1, part2, part3, largest, provenance
     return part1, part2, part3, largest
@@ -510,7 +541,27 @@ def _pair_factor_provenance_algorithms_1_3_block(
         key: -(dressed_core @ value.T + value @ dressed_core.T)
         for key, value in coupling.items()
     }
-    return algorithm_1, algorithm_3
+    audit_values = (
+        hoo_t1,
+        hvv_t1,
+        oo_l,
+        oo_t1,
+        vv_l,
+        vv_t1,
+        c_l,
+        c_t1,
+        pair_gram,
+        dressed_core,
+        oo_action_l,
+        oo_action_t1,
+        vv_action_l,
+        vv_action_t1,
+        *algorithm_1.values(),
+        *coupling.values(),
+        *algorithm_3.values(),
+    )
+    audit_largest = max(int(value.nbytes) for value in audit_values)
+    return algorithm_1, algorithm_3, audit_largest
 
 
 def pair_factor_residual_algorithms_1_3(
@@ -524,12 +575,17 @@ def pair_factor_residual_algorithms_1_3(
     nocc: int,
     nvir: int,
     auxiliary_block_size: Optional[int] = None,
+    record_provenance: bool = False,
 ) -> PairFactorResidual123Result:
     """Evaluate the exact Algorithms 1--3 group for a general pair factor.
 
     Cholesky vectors are streamed and neither ``t2[i,j,a,b]`` nor a four-index
     ERI is constructed.  This routine is the subtraction side of the hybrid
     identity ``R_hybrid = R_RR - R_123[U] + R_123[U_THC]``.
+
+    Set ``record_provenance=True`` for the diagnostic L/T1 subcores.  It is
+    disabled by default so production residual calls do not allocate or
+    evaluate the audit contractions.
     """
 
     nocc = int(nocc)
@@ -553,29 +609,41 @@ def pair_factor_residual_algorithms_1_3(
     sigma3 = xp.zeros_like(sigma1)
     provenance1 = None
     provenance3 = None
+    provenance_largest = 0
     largest = 0
     for start in range(0, naux, block_size):
         stop = min(start + block_size, naux)
         transformed = transform_cholesky_t1(
             t1, loo[start:stop], lov[start:stop], lvv[start:stop]
         )
-        part1, part2, part3, block_largest, block_provenance = (
-            _pair_factor_algorithms_1_3_block(
-                pair_factor,
-                core,
-                transformed,
-                nocc,
-                nvir,
-                loo=loo[start:stop],
-                lvv=lvv[start:stop],
-                return_provenance=True,
-            )
+        block_result = _pair_factor_algorithms_1_3_block(
+            pair_factor,
+            core,
+            transformed,
+            nocc,
+            nvir,
+            loo=loo[start:stop] if record_provenance else None,
+            lvv=lvv[start:stop] if record_provenance else None,
+            return_provenance=record_provenance,
         )
+        if record_provenance:
+            (
+                part1,
+                part2,
+                part3,
+                block_largest,
+                block_provenance,
+            ) = block_result
+        else:
+            part1, part2, part3, block_largest = block_result
         sigma1 += part1
         sigma2 += part2
         sigma3 += part3
-        if block_provenance is not None:
-            block1, block3 = block_provenance
+        if record_provenance and block_provenance is not None:
+            block1, block3, block_provenance_largest = block_provenance
+            provenance_largest = max(
+                provenance_largest, block_provenance_largest
+            )
             if provenance1 is None:
                 provenance1 = {
                     key: xp.zeros_like(value)
@@ -605,6 +673,7 @@ def pair_factor_residual_algorithms_1_3(
         largest_intermediate_nbytes=largest,
         algorithm_1_provenance=provenance1,
         algorithm_3_provenance=provenance3,
+        provenance_largest_intermediate_nbytes=provenance_largest,
     )
 
 
@@ -616,8 +685,13 @@ def rr_residual_algorithms_1_3(
     lvv: Any,
     *,
     auxiliary_block_size: Optional[int] = None,
+    record_provenance: bool = False,
 ) -> PairFactorResidual123Result:
-    """Return the exact RR-space contribution of paper Algorithms 1--3."""
+    """Return the exact RR-space contribution of paper Algorithms 1--3.
+
+    ``record_provenance`` is forwarded to the arbitrary-pair implementation
+    and is disabled by default for the production path.
+    """
 
     required = ("projector", "core", "nocc", "nvir")
     if any(not hasattr(doubles, name) for name in required):
@@ -632,6 +706,7 @@ def rr_residual_algorithms_1_3(
         nocc=int(doubles.nocc),
         nvir=int(doubles.nvir),
         auxiliary_block_size=auxiliary_block_size,
+        record_provenance=record_provenance,
     )
 
 
@@ -645,8 +720,14 @@ def thc_residual_algorithms_1_3(
     lvv: Any,
     *,
     auxiliary_block_size: Optional[int] = None,
+    record_provenance: bool = False,
 ) -> THCResidual123Result:
-    """Stream CD blocks through Algorithms 1--3 and sum their residuals."""
+    """Stream CD blocks through Algorithms 1--3 and sum their residuals.
+
+    Set ``record_provenance=True`` to retain the L/T1 audit subcores.  The
+    default path does not build the pair-factor audit tensor or its extra
+    contractions.
+    """
 
     if not _same_backend(y_occ, y_vir, core, t1, loo, lov, lvv):
         raise TypeError("all THC/CD inputs need one array backend")
@@ -664,9 +745,12 @@ def thc_residual_algorithms_1_3(
     sigma3 = xp.zeros_like(sigma1)
     provenance1 = None
     provenance3 = None
-    pair_factor = xp.einsum("iX,aX->iaX", y_occ, y_vir).reshape(
-        int(y_occ.shape[0]) * int(y_vir.shape[0]), rank
-    )
+    provenance_largest = 0
+    pair_factor = None
+    if record_provenance:
+        pair_factor = xp.einsum("iX,aX->iaX", y_occ, y_vir).reshape(
+            int(y_occ.shape[0]) * int(y_vir.shape[0]), rank
+        )
     largest = 0
     for start in range(0, naux, block_size):
         stop = min(start + block_size, naux)
@@ -676,27 +760,31 @@ def thc_residual_algorithms_1_3(
         part1 = thc_algorithm_1(y_occ, y_vir, core, transformed)
         part2 = thc_algorithm_2(y_occ, y_vir, core, transformed)
         part3 = thc_algorithm_3(y_occ, y_vir, core, transformed)
-        block_provenance = _pair_factor_provenance_algorithms_1_3_block(
-            pair_factor,
-            core,
-            transformed,
-            loo[start:stop],
-            lvv[start:stop],
-            int(y_occ.shape[0]),
-            int(y_vir.shape[0]),
-        )
-        block1, block3 = block_provenance
-        if provenance1 is None:
-            provenance1 = {
-                key: xp.zeros_like(value) for key, value in block1.items()
-            }
-            provenance3 = {
-                key: xp.zeros_like(value) for key, value in block3.items()
-            }
-        for key, value in block1.items():
-            provenance1[key] += value
-        for key, value in block3.items():
-            provenance3[key] += value
+        if record_provenance:
+            block_provenance = _pair_factor_provenance_algorithms_1_3_block(
+                pair_factor,
+                core,
+                transformed,
+                loo[start:stop],
+                lvv[start:stop],
+                int(y_occ.shape[0]),
+                int(y_vir.shape[0]),
+            )
+            block1, block3, block_provenance_largest = block_provenance
+            provenance_largest = max(
+                provenance_largest, block_provenance_largest
+            )
+            if provenance1 is None:
+                provenance1 = {
+                    key: xp.zeros_like(value) for key, value in block1.items()
+                }
+                provenance3 = {
+                    key: xp.zeros_like(value) for key, value in block3.items()
+                }
+            for key, value in block1.items():
+                provenance1[key] += value
+            for key, value in block3.items():
+                provenance3[key] += value
         sigma1 += part1
         sigma2 += part2
         sigma3 += part3
@@ -717,6 +805,7 @@ def thc_residual_algorithms_1_3(
         largest_intermediate_nbytes=largest,
         algorithm_1_provenance=provenance1,
         algorithm_3_provenance=provenance3,
+        provenance_largest_intermediate_nbytes=provenance_largest,
     )
 
 
