@@ -17,11 +17,13 @@
 This module composes the independently audited endpoints without restating
 their tensor formulae.  The doubles-core schedule is
 
-``A1 + A2 + A3 + ((A4 + A5) XOR A6) + A7 + A9``
+``A1 + A2 + A3 + ((A4 + A5) XOR A6) + (A7 + A7.T) + A9``
 
 in amplitude-THC coordinates, followed by exactly one shared RR
-back-projection.  The singles schedule is ``A8.singles_gh + A10.singles_ij``
-and is never back-projected.
+back-projection.  ``A7`` is the raw Appendix Algorithm 7 endpoint; its pair
+transpose is added by the complete residual assembler and both are retained
+separately for audit.  The singles schedule is
+``A8.singles_gh + A10.singles_ij`` and is never back-projected.
 
 The result is deliberately not a production residual.  Algorithm 7's mapping
 to literal Eq. 35 remains unresolved, so the computed Algorithm 7 value is
@@ -613,6 +615,8 @@ class THCCompleteAuditLedgerEntry:
     xor_branch: str | None
     individual_backprojection_count: int
     participates_in_shared_backprojection: bool
+    pair_symmetrization: str | None
+    pair_symmetrization_application_count: int
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -630,6 +634,10 @@ class THCCompleteAuditLedgerEntry:
             ),
             "participates_in_shared_backprojection": bool(
                 self.participates_in_shared_backprojection
+            ),
+            "pair_symmetrization": self.pair_symmetrization,
+            "pair_symmetrization_application_count": int(
+                self.pair_symmetrization_application_count
             ),
         }
 
@@ -673,6 +681,7 @@ class THCCompleteAuditResult:
     algorithm_5: Any | None
     algorithm_6: Any | None
     algorithm_7: THCOmegaDAlgorithm7Result
+    algorithm_7_pair_symmetrized: Any
     algorithm_8: THCOmegaGHAlgorithm8Result
     algorithm_9: THCOmegaEAlgorithm9Result
     algorithm_10: THCOmegaIJAlgorithm10Result
@@ -730,7 +739,7 @@ class THCCompleteAuditResult:
             "paper_source": "arXiv:2111.11473v1",
             "covered_algorithms": list(range(1, 11)),
             "doubles_definition": (
-                "A1+A2+A3+((A4+A5) XOR A6)+A7+A9"
+                "A1+A2+A3+((A4+A5) XOR A6)+(A7+A7.T)+A9"
             ),
             "singles_definition": "A8.singles_gh+A10.singles_ij",
             "accepted": False,
@@ -741,6 +750,13 @@ class THCCompleteAuditResult:
             "audit_only": True,
             "performance_eligible": False,
             "algorithm7_computed_value_retained": True,
+            "algorithm7_raw_value_retained": True,
+            "algorithm7_pair_symmetrized_value_retained": True,
+            "algorithm7_pair_symmetrization_applied": True,
+            "algorithm7_pair_symmetrization": "raw-plus-pair-transpose",
+            "algorithm7_pair_symmetrization_scope": (
+                "complete-residual-composition-only"
+            ),
             "algorithm7_eq35_mapping": "unresolved-by-paper-and-dense-audit",
             "algorithm7_eq35_equivalence": False,
             "algorithm7_eq35_status": "fail-closed",
@@ -835,6 +851,12 @@ def _ledger(omega_ac_path: str) -> THCCompleteAuditLedger:
                 xor_branch=branch,
                 individual_backprojection_count=0,
                 participates_in_shared_backprojection=doubles and selected,
+                pair_symmetrization=(
+                    "raw-plus-pair-transpose" if algorithm == 7 else None
+                ),
+                pair_symmetrization_application_count=(
+                    1 if algorithm == 7 else 0
+                ),
             )
         )
     return THCCompleteAuditLedger(
@@ -874,8 +896,9 @@ def assemble_complete_thc_ccsd_audit(
 
     ``require_eq35_equivalence=True`` fails before contractions because the
     Algorithm 7 / literal Eq. 35 map is unresolved.  With the default false
-    value, Algorithm 7 is computed and retained, but the returned result can
-    never be accepted or enabled for production.
+    value, raw Algorithm 7 and its physical pair-symmetric composition are
+    computed and retained, but the returned result can never be accepted or
+    enabled for production.
     """
 
     require_eq35_equivalence = _boolean(
@@ -1079,13 +1102,29 @@ def assemble_complete_thc_ccsd_audit(
         singles_algorithm_10=algorithm_10.singles_ij,
     )
 
+    # In the RR/CD complete-residual convention, the raw Algorithm 7 endpoint
+    # needs its X<->X' counterpart.  Add that pair transpose explicitly at
+    # composition.  The raw paper endpoint remains unchanged and is retained
+    # alongside this value for the unresolved Eq. 35 audit.
+    algorithm_7_pair_symmetrized = (
+        algorithm_7.combined + algorithm_7.combined.T
+    )
+    _validate_endpoint_outputs(
+        y_occ,
+        rank=rank,
+        nocc=nocc,
+        nvir=nvir,
+        transfer_counter=transfer_counter,
+        algorithm_7_pair_symmetrized=algorithm_7_pair_symmetrized,
+    )
+
     doubles_thc = xp.zeros((rank, rank), dtype=dtype)
     for contribution in (
         algorithm_1,
         algorithm_2,
         algorithm_3,
         omega_ac,
-        algorithm_7.combined,
+        algorithm_7_pair_symmetrized,
         algorithm_9.omega_e,
     ):
         doubles_thc += contribution
@@ -1119,6 +1158,7 @@ def assemble_complete_thc_ccsd_audit(
         algorithm_5=algorithm_5,
         algorithm_6=algorithm_6,
         algorithm_7=algorithm_7,
+        algorithm_7_pair_symmetrized=algorithm_7_pair_symmetrized,
         algorithm_8=algorithm_8,
         algorithm_9=algorithm_9,
         algorithm_10=algorithm_10,

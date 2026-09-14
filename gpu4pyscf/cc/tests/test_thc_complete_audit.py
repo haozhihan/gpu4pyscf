@@ -131,10 +131,16 @@ def test_complete_schedule_sums_from_zero_and_backprojects_exactly_once(
         result.algorithm_2,
         result.algorithm_3,
         result.algorithm_6,
-        result.algorithm_7.combined,
+        result.algorithm_7_pair_symmetrized,
         result.algorithm_9.omega_e,
     ):
         expected_thc += contribution
+    np.testing.assert_allclose(
+        result.algorithm_7_pair_symmetrized,
+        result.algorithm_7.combined + result.algorithm_7.combined.T,
+        atol=0.0,
+        rtol=0.0,
+    )
     np.testing.assert_allclose(result.doubles_thc, expected_thc, atol=2e-12)
     np.testing.assert_allclose(
         result.doubles_rr,
@@ -217,6 +223,10 @@ def test_algorithm7_value_is_retained_but_acceptance_stays_fail_closed():
     assert result.complete_validated is False
     assert result.complete_ccsd_residual is False
     assert metadata["algorithm7_computed_value_retained"] is True
+    assert metadata["algorithm7_pair_symmetrization_applied"] is True
+    assert metadata["algorithm7_pair_symmetrization"] == (
+        "raw-plus-pair-transpose"
+    )
     assert metadata["algorithm7_eq35_mapping"] == (
         "unresolved-by-paper-and-dense-audit"
     )
