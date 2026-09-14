@@ -55,6 +55,7 @@ fi
 
 DEPLOYMENT_PROFILE="${CCSD_EXPECTED_DEPLOYMENT_PROFILE:-candidate}"
 REQUIRE_CANONICAL_PRISTINE="${CCSD_REQUIRE_CANONICAL_PRISTINE:-0}"
+COLUMN_KERNEL="${GINT_COLUMN_KERNEL:-reference}"
 if [[ "${DEPLOYMENT_PROFILE}" != "candidate" ]]; then
   echo "run_mtu_gint_gate.sbatch requires the candidate deployment profile" >&2
   exit 2
@@ -63,6 +64,13 @@ case "${REQUIRE_CANONICAL_PRISTINE}" in
   0|1) ;;
   *)
     echo "CCSD_REQUIRE_CANONICAL_PRISTINE must be 0 or 1" >&2
+    exit 2
+    ;;
+esac
+case "${COLUMN_KERNEL}" in
+  reference|grouped) ;;
+  *)
+    echo "GINT_COLUMN_KERNEL must be reference or grouped" >&2
     exit 2
     ;;
 esac
@@ -151,12 +159,17 @@ GATE_ARGUMENTS=(
   --selected-column-tolerance "${COLUMN_TOLERANCE:-2e-10}"
   --diagonal-tolerance "${DIAGONAL_TOLERANCE:-2e-10}"
   --group-size "${GINT_GROUP_SIZE:-16}"
+  --column-kernel "${COLUMN_KERNEL}"
   --max-block-bytes "${GINT_MAX_BLOCK_BYTES:-268435456}"
 )
 if [[ -n "${GINT_MAX_RANK:-}" ]]; then
   GATE_ARGUMENTS+=(--max-rank "${GINT_MAX_RANK}")
 fi
 if [[ -n "${GINT_RUNTIME_GATE_RECEIPT:-}" ]]; then
+  if [[ "${COLUMN_KERNEL}" != "reference" ]]; then
+    echo "grouped selected-column prototype cannot consume a release receipt" >&2
+    exit 2
+  fi
   RELEASE_PIN_PATH="${SOURCE_ROOT}/gpu4pyscf/cc/gint_release_pin.json"
   if [[ ! -f "${RELEASE_PIN_PATH}" || -L "${RELEASE_PIN_PATH}" ]]; then
     echo "release snapshot B is missing its fixed regular-file GINT pin" >&2

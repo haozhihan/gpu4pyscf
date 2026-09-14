@@ -352,6 +352,7 @@ int GINTfill_selected_int2e_columns(
     void *stream, BasisProdCache *bpcache,
     const GINTSelectedPairData *data, double *columns, int batch_size,
     const int *selected_pairs, const int *selected_rows, int selected_count,
+    /* bit 0: diagonal row group; bit 1: adjacent ket-task GOUT reuse */
     int cp_ij_id, int cp_kl_id, int row_group_diagonal,
     double log_cutoff, double omega, void *workspace, size_t workspace_bytes,
     int *constant_copy_performed);

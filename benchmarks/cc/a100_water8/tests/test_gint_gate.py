@@ -1918,6 +1918,25 @@ def test_gate_passes_only_complete_explicit_evidence_and_has_no_speed_target():
     assert timing["evidence"]["speed_threshold_seconds"] is None
 
 
+def test_grouped_ab_record_can_pass_correctness_but_not_release_qualification():
+    record = _passing_record()
+    record["configuration"] = {"column_kernel": "grouped"}
+    record["provider"]["column_kernel"] = "grouped"
+    record["provider"]["performance_eligible"] = False
+
+    decision = GATE.evaluate_gate(record)
+
+    assert decision["correctness_passed"] is True
+    assert decision["qualification_passed"] is False
+    assert decision["performance_eligible"] is False
+    release_kernel = next(
+        item for item in decision["checks"]
+        if item["id"] == "selected_column_release_kernel"
+    )
+    assert release_kernel["scope"] == "qualification"
+    assert release_kernel["passed"] is False
+
+
 def test_synchronized_hbm_checkpoint_records_driver_and_pool_state():
     synchronizations = []
     pool = SimpleNamespace(used_bytes=lambda: 600, total_bytes=lambda: 700)
@@ -2012,7 +2031,7 @@ def test_gate_keeps_correctness_separate_from_pending_performance_audit():
     assert decision["qualification_passed"] is False
 
 
-def test_gate_requires_all_three_batch_sizes_and_bounded_allocations():
+def test_gate_requires_all_four_batch_sizes_and_bounded_allocations():
     record = _passing_record()
     record["numerical_validation"]["selected_column_batches"].pop()
     allocation = record["allocation_validation"]["returned_batches"][-1]
@@ -2341,6 +2360,9 @@ def test_mtu_launcher_is_snapshot_aware_and_physical8_guarded():
     assert "--require-performance" in text
     assert '"${SCRIPT_DIR}/topology_guard.py"' in text
     assert '"${SCRIPT_DIR}/gint_gate.py"' in text
+    assert 'COLUMN_KERNEL="${GINT_COLUMN_KERNEL:-reference}"' in text
+    assert '--column-kernel "${COLUMN_KERNEL}"' in text
+    assert "grouped selected-column prototype cannot consume" in text
 
 
 def test_dry_run_records_thresholds_and_does_not_write_output(tmp_path: Path):
@@ -2361,6 +2383,17 @@ def test_dry_run_records_thresholds_and_does_not_write_output(tmp_path: Path):
     assert output == args.output.resolve()
     assert record["dry_run"] is True
     assert record["thresholds"]["eri_tol"] == 1e-8
-    assert record["configuration"]["selected_column_batch_sizes"] == [1, 8, 32]
+    assert record["configuration"]["selected_column_batch_sizes"] == [1, 2, 8, 32]
+    assert record["configuration"]["column_kernel"] == "reference"
     assert record["speed_threshold_seconds"] is None
     assert not output.exists()
+
+
+def test_parser_exposes_explicit_reference_grouped_ab_switch(tmp_path: Path):
+    args = GATE._parser().parse_args([
+        "--output", str(tmp_path / "grouped.json"),
+        "--column-kernel", "grouped",
+        "--dry-run",
+    ])
+    _output, record = GATE.run(args)
+    assert record["configuration"]["column_kernel"] == "grouped"

@@ -74,7 +74,7 @@ EXPECTED_PCIE_WIDTH = "16"
 EXPECTED_WATER2_GEOMETRY_SHA256 = (
     "d392c0d09b349aa8044d7d652d8ca073bee8a77111db973fdcaf297b13dfedc3"
 )
-SELECTED_COLUMN_BATCH_SIZES = (1, 8, 32)
+SELECTED_COLUMN_BATCH_SIZES = (1, 2, 8, 32)
 SELECTED_PROVIDER_FACTORIZATION = "gint-selected-shell-pair-columns"
 SELECTED_PROVIDER_BACKEND = "cupy-gint-selected-cabi"
 SELECTED_COLUMNS_SYMBOL = "GINTfill_selected_int2e_columns"
@@ -925,6 +925,11 @@ def evaluate_gate(record: dict[str, Any]) -> dict[str, Any]:
         },
     )
     provider = record.get("provider", {})
+    configuration = record.get("configuration", {})
+    requested_column_kernel = configuration.get(
+        "column_kernel", "reference"
+    )
+    reported_column_kernel = provider.get("column_kernel", "reference")
     schedule = provider.get("schedule") or {}
     c_abi = provider.get("c_abi") or {}
     high_rys_workspace = provider.get("high_rys_workspace") or {}
@@ -962,6 +967,23 @@ def evaluate_gate(record: dict[str, Any]) -> dict[str, Any]:
                 "kernel_launches",
             )
         } | {"c_abi": c_abi},
+    )
+    check(
+        "selected_column_kernel_binding",
+        requested_column_kernel in {"reference", "grouped"}
+        and reported_column_kernel == requested_column_kernel,
+        "selected-column kernel metadata does not match the requested A/B arm",
+        {
+            "requested": requested_column_kernel,
+            "reported": reported_column_kernel,
+        },
+    )
+    check(
+        "selected_column_release_kernel",
+        requested_column_kernel == "reference",
+        "grouped selected-column scheduling is an A/B prototype, not a release",
+        requested_column_kernel,
+        scope="qualification",
     )
     check(
         "bounded_selected_provider",
@@ -1459,6 +1481,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--selected-column-tolerance", type=float, default=2e-10)
     parser.add_argument("--diagonal-tolerance", type=float, default=2e-10)
     parser.add_argument("--group-size", type=int, default=16)
+    parser.add_argument(
+        "--column-kernel",
+        choices=("reference", "grouped"),
+        default="reference",
+        help="selected-column CUDA scheduling path for explicit A/B runs",
+    )
     parser.add_argument("--max-rank", type=int, default=None)
     parser.add_argument("--max-block-bytes", type=int, default=256 * 1024**2)
     parser.add_argument("--oracle-max-bytes", type=int, default=256 * 1024**2)
@@ -1479,6 +1507,10 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ValueError("oracle tolerances must be non-negative")
     if args.group_size < 1:
         raise ValueError("group_size must be positive")
+    if getattr(args, "column_kernel", "reference") not in {
+        "reference", "grouped"
+    }:
+        raise ValueError("column_kernel must be reference or grouped")
     if args.max_rank is not None and args.max_rank < 1:
         raise ValueError("max_rank must be positive")
     if args.max_block_bytes < 8:
@@ -1504,6 +1536,7 @@ def _validate_args(args: argparse.Namespace) -> None:
 
 def run(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
     _validate_args(args)
+    column_kernel = getattr(args, "column_kernel", "reference")
     runtime_gate_receipt = getattr(args, "runtime_gate_receipt", None)
     output = args.output.expanduser().resolve()
     if output.exists():
@@ -1544,6 +1577,7 @@ def run(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
                 "max_returned_batch_bytes": int(args.max_block_bytes),
                 "oracle_max_bytes": int(args.oracle_max_bytes),
                 "precision": "fp64",
+                "column_kernel": column_kernel,
             },
             "speed_threshold_seconds": None,
             "runtime_gate_receipt": (
@@ -1584,6 +1618,7 @@ def run(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
             "max_returned_batch_bytes": int(args.max_block_bytes),
             "oracle_max_bytes": int(args.oracle_max_bytes),
             "precision": "fp64",
+            "column_kernel": column_kernel,
             "runtime_gate_receipt": (
                 None if runtime_gate_receipt is None
                 else str(runtime_gate_receipt.expanduser().resolve())
@@ -1630,6 +1665,7 @@ def run(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
             direct_scf_tol=args.direct_scf_tol,
             group_size=args.group_size,
             max_batch_size=max(SELECTED_COLUMN_BATCH_SIZES),
+            column_kernel=column_kernel,
             transfer_counter=transfers,
             runtime_gate_receipt=runtime_gate_receipt,
             runtime_source_digest=record["source"]["tree_sha256_at_start"],
@@ -1838,9 +1874,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(record, indent=2, sort_keys=True))
         return 0
     release_mode = args.runtime_gate_receipt is not None
+    prototype_ab = args.column_kernel == "grouped"
     print(json.dumps({
         "output": str(output),
-        "mode": "release" if release_mode else "qualification",
+        "mode": (
+            "release" if release_mode else
+            "prototype-ab" if prototype_ab else "qualification"
+        ),
         "status": record["status"],
         "correctness_passed": record["gate_decision"][
             "correctness_passed"
@@ -1866,6 +1906,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         decision["performance_eligible"] is True
         if release_mode else decision["qualification_passed"] is True
     )
+    if prototype_ab and not release_mode:
+        accepted = decision["correctness_passed"] is True
     return 0 if record["status"] == "completed" and accepted else 1
 
 

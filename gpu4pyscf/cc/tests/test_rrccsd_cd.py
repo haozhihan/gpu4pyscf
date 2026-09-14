@@ -30,6 +30,25 @@ from gpu4pyscf.cc.rrccsd import RRCCSD, _active_restricted_orbitals
 from gpu4pyscf.cc.thc_rrccsd import THCRRCCSD
 
 
+def test_rrccsd_selected_column_kernel_selector_fails_closed():
+    assert "gint_column_kernel" in RRCCSD._keys
+    with pytest.raises(ValueError, match="must be 'reference' or 'grouped'"):
+        RRCCSD(
+            None,
+            eri_tol=1e-8,
+            rr_eig_cutoff=1e-6,
+            gint_column_kernel="automatic",
+        )
+    with pytest.raises(ValueError, match="applies only to the selected"):
+        RRCCSD(
+            None,
+            eri_tol=1e-8,
+            rr_eig_cutoff=1e-6,
+            gint_column_backend="restricted-reference",
+            gint_column_kernel="grouped",
+        )
+
+
 def _bare_rr_solver(
     integrals: MOThreeIndexIntegralProvider,
     energies: np.ndarray,

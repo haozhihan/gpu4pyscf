@@ -160,6 +160,14 @@ METHOD_ID="${METHOD:?set METHOD to a counterpoise method id}"
 RUN_ID="${CP_RUN_ID:-${SLURM_JOB_ID}}"
 GINT_RUNTIME_GATE_RECEIPT="${GINT_RUNTIME_GATE_RECEIPT:-}"
 GINT_COLUMN_BACKEND_VALUE="${GINT_COLUMN_BACKEND:-selected}"
+GINT_COLUMN_KERNEL_VALUE="${GINT_COLUMN_KERNEL:-reference}"
+case "${GINT_COLUMN_KERNEL_VALUE}" in
+  reference|grouped) ;;
+  *)
+    echo "GINT_COLUMN_KERNEL must be reference or grouped" >&2
+    exit 2
+    ;;
+esac
 if [[ ! "${CASE_ID}" =~ ^[A-Za-z0-9._-]+$ || ! "${METHOD_ID}" =~ ^[A-Za-z0-9._-]+$ || ! "${RUN_ID}" =~ ^[A-Za-z0-9._-]+$ ]]; then
   echo "CASE, METHOD, and CP_RUN_ID may contain only letters, digits, dot, underscore, and dash" >&2
   exit 2
@@ -241,6 +249,7 @@ CP_ARGUMENTS=(
   --eri-tol "${ERI_TOL:-1e-8}"
   --direct-scf-tol "${DIRECT_SCF_TOL:-1e-13}"
   --gint-column-backend "${GINT_COLUMN_BACKEND:-selected}"
+  --gint-column-kernel "${GINT_COLUMN_KERNEL_VALUE}"
   --gint-group-size "${GINT_GROUP_SIZE:-16}"
   --gint-max-batch-size "${GINT_MAX_BATCH_SIZE:-32}"
   --cd-mo-block-size "${CD_MO_BLOCK_SIZE:-32}"
@@ -283,6 +292,10 @@ PY
   esac
   if [[ "${GINT_COLUMN_BACKEND_VALUE}" != "selected" ]]; then
     echo "GINT_RUNTIME_GATE_RECEIPT requires GINT_COLUMN_BACKEND=selected" >&2
+    exit 2
+  fi
+  if [[ "${GINT_COLUMN_KERNEL_VALUE}" != "reference" ]]; then
+    echo "grouped selected-column prototype cannot consume a release receipt" >&2
     exit 2
   fi
   case "${METHOD_ID}" in

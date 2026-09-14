@@ -873,6 +873,9 @@ def _make_solver(mol: Any, method: str, device: str, options: dict[str, Any]) ->
             "gint_column_backend": str(
                 options.get("gint_column_backend", "selected")
             ),
+            "gint_column_kernel": str(
+                options.get("gint_column_kernel", "reference")
+            ),
             "gint_group_size": int(options.get("gint_group_size", 16)),
             "gint_max_block_bytes": options.get("gint_max_block_bytes"),
             "gint_max_batch_size": int(
@@ -1353,6 +1356,11 @@ def _parser() -> argparse.ArgumentParser:
         choices=("selected", "restricted-reference"),
         default="selected",
     )
+    parser.add_argument(
+        "--gint-column-kernel",
+        choices=("reference", "grouped"),
+        default="reference",
+    )
     parser.add_argument("--gint-group-size", type=int, default=16)
     parser.add_argument("--gint-max-block-bytes", type=int, default=None)
     parser.add_argument("--gint-max-batch-size", type=int, default=32)
@@ -1456,6 +1464,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "GINT runtime gate receipt does not exist: "
                 f"{args.gint_runtime_gate_receipt}"
             )
+    if (
+        args.gint_column_backend != "selected"
+        and args.gint_column_kernel != "reference"
+    ):
+        raise ValueError(
+            "--gint-column-kernel applies only to --gint-column-backend selected"
+        )
+    if (
+        args.gint_column_kernel == "grouped"
+        and args.gint_runtime_gate_receipt is not None
+    ):
+        raise ValueError(
+            "grouped selected-column scheduling cannot consume a release receipt"
+        )
     cases = load_cases()
     case = cases[args.case]
     geometry = molecule_atom_payload(case["geometry_angstrom"])
@@ -1501,6 +1523,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "direct_scf_tol": args.direct_scf_tol,
         "cd_max_rank": args.cd_max_rank,
         "gint_column_backend": args.gint_column_backend,
+        "gint_column_kernel": args.gint_column_kernel,
         "gint_group_size": args.gint_group_size,
         "gint_max_block_bytes": args.gint_max_block_bytes,
         "gint_max_batch_size": args.gint_max_batch_size,

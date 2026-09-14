@@ -1477,6 +1477,7 @@ class CounterpoiseTests(unittest.TestCase):
             "direct_scf_tol": 4e-13,
             "cd_max_rank": 101,
             "gint_column_backend": "restricted-reference",
+            "gint_column_kernel": "reference",
             "gint_group_size": 12,
             "gint_max_block_bytes": 123456,
             "gint_max_batch_size": 11,
@@ -1507,7 +1508,8 @@ class CounterpoiseTests(unittest.TestCase):
         self.assertEqual(solver.constructor_options["eri_backend"], "cd")
         for name in (
             "eri_tol", "rr_eig_cutoff", "direct_scf_tol", "cd_max_rank",
-            "gint_column_backend", "gint_group_size", "gint_max_block_bytes",
+            "gint_column_backend", "gint_column_kernel", "gint_group_size",
+            "gint_max_block_bytes",
             "gint_max_batch_size", "cd_mo_block_size",
             "denominator_tolerance", "denominator_max_rank",
             "rr_initial_rank", "rr_solver_tolerance", "rr_solver_maxiter",
@@ -1610,6 +1612,34 @@ class CounterpoiseTests(unittest.TestCase):
         )
         self.assertEqual(record.correlation_energy_eh, -1.0)
         self.assertEqual(record.total_energy_eh, -81.0)
+
+    def test_grouped_gint_selector_rejects_backend_and_release_receipt(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(ValueError, "applies only"):
+            MODULE.main([
+                "--case", "water2-tz",
+                "--method", "rr_cd",
+                "--output", "/tmp/unused-counterpoise.json",
+                "--gint-column-backend", "restricted-reference",
+                "--gint-column-kernel", "grouped",
+                "--dry-run",
+            ])
+
+        with tempfile.TemporaryDirectory() as directory:
+            receipt = Path(directory) / "reference-release-receipt.json"
+            receipt.write_text("{}")
+            with self.assertRaisesRegex(
+                ValueError, "cannot consume a release receipt"
+            ):
+                MODULE.main([
+                    "--case", "water2-tz",
+                    "--method", "rr_cd",
+                    "--output", "/tmp/unused-counterpoise.json",
+                    "--gint-column-kernel", "grouped",
+                    "--gint-runtime-gate-receipt", str(receipt),
+                    "--dry-run",
+                ])
 
     def test_fno_dry_run_rejects_invalid_threshold_before_compute(self) -> None:
         with self.assertRaisesRegex(

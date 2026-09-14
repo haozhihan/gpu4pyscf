@@ -281,6 +281,11 @@ def _parser() -> argparse.ArgumentParser:
         choices=("selected", "restricted-reference"),
         default="selected",
     )
+    p.add_argument(
+        "--gint-column-kernel",
+        choices=("reference", "grouped"),
+        default="reference",
+    )
     p.add_argument("--gint-group-size", type=int, default=16)
     p.add_argument("--gint-max-block-bytes", type=int, default=None)
     p.add_argument("--gint-max-batch-size", type=int, default=32)
@@ -2023,6 +2028,7 @@ def _rr_cd_constructor_options(
         "direct_scf_tol": args.direct_scf_tol,
         "cd_max_rank": args.cd_max_rank,
         "gint_column_backend": args.gint_column_backend,
+        "gint_column_kernel": args.gint_column_kernel,
         "gint_group_size": args.gint_group_size,
         "gint_max_block_bytes": args.gint_max_block_bytes,
         "gint_max_batch_size": args.gint_max_batch_size,
@@ -2632,6 +2638,20 @@ def _validate_run_configuration(args: argparse.Namespace) -> None:
                 f"{args.gint_runtime_gate_receipt}"
             )
     if (
+        args.gint_column_backend != "selected"
+        and args.gint_column_kernel != "reference"
+    ):
+        raise ValueError(
+            "--gint-column-kernel applies only to --gint-column-backend selected"
+        )
+    if (
+        args.gint_column_kernel == "grouped"
+        and args.gint_runtime_gate_receipt is not None
+    ):
+        raise ValueError(
+            "grouped selected-column scheduling cannot consume a release receipt"
+        )
+    if (
         args.orbital_artifact_in is not None
         and args.orbital_artifact_out is not None
     ):
@@ -2857,6 +2877,7 @@ def _plan(args: argparse.Namespace, case: dict[str, Any]) -> dict[str, Any]:
         "direct_scf_tol",
         "cd_max_rank",
         "gint_column_backend",
+        "gint_column_kernel",
         "gint_group_size",
         "gint_max_block_bytes",
         "gint_max_batch_size",

@@ -789,6 +789,7 @@ def test_rr_cd_constructor_mapping_exposes_every_public_control() -> None:
         "direct_scf_tol": 2e-13,
         "cd_max_rank": 301,
         "gint_column_backend": "restricted-reference",
+        "gint_column_kernel": "reference",
         "gint_group_size": 7,
         "gint_max_block_bytes": 999999,
         "gint_max_batch_size": 13,
@@ -807,6 +808,30 @@ def test_rr_cd_constructor_mapping_exposes_every_public_control() -> None:
         "rr_ring_kernel": "gemm",
         "precision": "fp64",
     }
+
+
+def test_grouped_gint_selector_rejects_incompatible_backend_and_receipt(
+    tmp_path: Path,
+) -> None:
+    incompatible = BENCHMARK._parser().parse_args([
+        "--case", "water2-tz",
+        "--method", "rr_cd",
+        "--gint-column-backend", "restricted-reference",
+        "--gint-column-kernel", "grouped",
+    ])
+    with pytest.raises(ValueError, match="applies only"):
+        BENCHMARK._validate_run_configuration(incompatible)
+
+    receipt = tmp_path / "reference-release-receipt.json"
+    receipt.write_text("{}")
+    release = BENCHMARK._parser().parse_args([
+        "--case", "water2-tz",
+        "--method", "rr_cd",
+        "--gint-column-kernel", "grouped",
+        "--gint-runtime-gate-receipt", str(receipt),
+    ])
+    with pytest.raises(ValueError, match="cannot consume a release receipt"):
+        BENCHMARK._validate_run_configuration(release)
 
 
 def test_thc_cd_constructor_mapping_exposes_all_rr_and_thc_controls() -> None:
@@ -1178,7 +1203,8 @@ def test_thc_cd_identity_includes_every_cd_rr_and_thc_endpoint_control() -> None
 
     for name in BENCHMARK._rr_cd_constructor_options(args):
         if name not in {
-            "gint_column_backend", "gint_group_size", "gint_max_block_bytes",
+            "gint_column_backend", "gint_column_kernel", "gint_group_size",
+            "gint_max_block_bytes",
             "gint_max_batch_size", "cd_mo_block_size",
             "rr_initial_rank", "rr_auxiliary_block_size",
             "rr_virtual_block_size", "rr_ring_kernel",

@@ -276,6 +276,10 @@ class RRCCSD(ccsd_incore.CCSD):
         ``"selected"`` uses the bounded batched selected-shell C ABI.
         ``"restricted-reference"`` retains the earlier one-column reference
         provider for numerical comparisons.
+    gint_column_kernel
+        ``"reference"`` retains the qualified one-pivot-per-GOUT kernel.
+        ``"grouped"`` reuses GOUT across pivots with the same ket shell task;
+        it remains performance-ineligible until the fixed A100 A/B gate.
     gint_max_batch_size
         Maximum number of selected AO-pair columns evaluated in one blocked
         pivoted-Cholesky request.
@@ -302,6 +306,7 @@ class RRCCSD(ccsd_incore.CCSD):
         "direct_scf_tol",
         "cd_max_rank",
         "gint_column_backend",
+        "gint_column_kernel",
         "gint_group_size",
         "gint_max_block_bytes",
         "gint_max_batch_size",
@@ -345,6 +350,7 @@ class RRCCSD(ccsd_incore.CCSD):
         direct_scf_tol: float = 1e-13,
         cd_max_rank: Optional[int] = None,
         gint_column_backend: str = "selected",
+        gint_column_kernel: str = "reference",
         gint_group_size: int = 16,
         gint_max_block_bytes: Optional[int] = None,
         gint_max_batch_size: int = 32,
@@ -396,6 +402,18 @@ class RRCCSD(ccsd_incore.CCSD):
             raise ValueError(
                 "gint_column_backend must be 'selected' or "
                 "'restricted-reference'"
+            )
+        gint_column_kernel = str(gint_column_kernel).strip().lower()
+        if gint_column_kernel not in {"reference", "grouped"}:
+            raise ValueError(
+                "gint_column_kernel must be 'reference' or 'grouped'"
+            )
+        if (
+            gint_column_backend != "selected"
+            and gint_column_kernel != "reference"
+        ):
+            raise ValueError(
+                "gint_column_kernel applies only to the selected GINT backend"
             )
         gint_runtime_execution_mode = str(
             gint_runtime_execution_mode
@@ -466,6 +484,7 @@ class RRCCSD(ccsd_incore.CCSD):
         self.direct_scf_tol = direct_scf_tol
         self.cd_max_rank = cd_max_rank
         self.gint_column_backend = gint_column_backend
+        self.gint_column_kernel = gint_column_kernel
         self.gint_group_size = gint_group_size
         self.gint_max_block_bytes = gint_max_block_bytes
         self.gint_max_batch_size = gint_max_batch_size
@@ -614,6 +633,7 @@ class RRCCSD(ccsd_incore.CCSD):
                     "threshold": self.eri_tol,
                     "max_rank": self.cd_max_rank,
                     "gint_column_backend": self.gint_column_backend,
+                    "gint_column_kernel": self.gint_column_kernel,
                     "gint_group_size": self.gint_group_size,
                     "gint_max_block_bytes": self.gint_max_block_bytes,
                     "gint_max_batch_size": self.gint_max_batch_size,
@@ -774,6 +794,7 @@ class RRCCSD(ccsd_incore.CCSD):
                         direct_scf_tol=self.direct_scf_tol,
                         group_size=self.gint_group_size,
                         max_batch_size=self.gint_max_batch_size,
+                        column_kernel=self.gint_column_kernel,
                         transfer_counter=self.run_metrics.transfers,
                         runtime_gate_receipt=self.gint_runtime_gate_receipt,
                         runtime_execution_mode=self.gint_runtime_execution_mode,

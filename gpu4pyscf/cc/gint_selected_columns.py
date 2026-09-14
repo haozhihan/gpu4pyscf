@@ -68,6 +68,8 @@ _STREAM_SAFETY_STRATEGY = (
     "process-wide-per-device-single-stream-with-host-enqueue-lock"
 )
 _STREAM_SAFETY_POLICY_VERSION = 1
+_COLUMN_KERNELS = ("reference", "grouped")
+_GROUPED_COLUMN_FLAG = 2
 
 
 @dataclass(frozen=True)
@@ -173,6 +175,66 @@ def _normalise_selected_pairs(
     result = np.ascontiguousarray(as_int64, dtype=np.int32)
     result.flags.writeable = False
     return result
+
+
+def _normalise_column_kernel(value: Any) -> str:
+    if not isinstance(value, str):
+        raise TypeError("column_kernel must be a string")
+    result = value.strip().lower()
+    if result not in _COLUMN_KERNELS:
+        raise ValueError(
+            "column_kernel must be one of: " + ", ".join(_COLUMN_KERNELS)
+        )
+    return result
+
+
+def _order_selected_request(
+    pivots: np.ndarray,
+    rows: np.ndarray,
+    pair_task_id: np.ndarray,
+    *,
+    column_kernel: str,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Order one cp-local request and report its ket shell-task groups.
+
+    The grouped CUDA path recognizes adjacent pivots with the same
+    ``pair_task_id``.  A stable sort preserves the input order inside a group;
+    the separately carried output rows preserve the public batch layout.
+    """
+
+    column_kernel = _normalise_column_kernel(column_kernel)
+    pivots = np.asarray(pivots, dtype=np.int32)
+    rows = np.asarray(rows, dtype=np.int32)
+    pair_task_id = np.asarray(pair_task_id, dtype=np.int32)
+    if pivots.ndim != 1 or rows.shape != pivots.shape:
+        raise ValueError("selected pivots and output rows must be aligned vectors")
+    if pair_task_id.ndim != 1:
+        raise ValueError("pair_task_id must be one-dimensional")
+    if pivots.size and (
+        np.any(pivots < 0) or np.any(pivots >= pair_task_id.size)
+    ):
+        raise IndexError("selected pivot is outside pair_task_id")
+    tasks = pair_task_id[pivots]
+    if np.any(tasks < 0):
+        raise ValueError("selected request contains a screened shell-pair task")
+    if column_kernel == "grouped" and pivots.size > 1:
+        order = np.argsort(tasks, kind="stable")
+        pivots = pivots[order]
+        rows = rows[order]
+        tasks = tasks[order]
+    ordered_pivots = np.ascontiguousarray(pivots, dtype=np.int32)
+    ordered_rows = np.ascontiguousarray(rows, dtype=np.int32)
+    if column_kernel == "reference":
+        group_count = int(tasks.size)
+    else:
+        group_count = (
+            0
+            if tasks.size == 0
+            else 1 + int(np.count_nonzero(tasks[1:] != tasks[:-1]))
+        )
+    ordered_pivots.flags.writeable = False
+    ordered_rows.flags.writeable = False
+    return ordered_pivots, ordered_rows, group_count
 
 
 @dataclass(frozen=True)
@@ -662,6 +724,7 @@ class GINTSelectedAOPairColumnProvider:
         direct_scf_tol: float = 1e-13,
         group_size: int = 16,
         max_batch_size: int = 32,
+        column_kernel: str = "reference",
         transfer_counter: Any = None,
         omega: float = 0.0,
         runtime_gate_receipt: Optional[str | Path] = None,
@@ -698,6 +761,7 @@ class GINTSelectedAOPairColumnProvider:
             minimum=1,
             maximum=np.iinfo(np.int32).max,
         )
+        column_kernel = _normalise_column_kernel(column_kernel)
         if not np.isfinite(omega):
             raise ValueError("omega must be finite")
         if transfer_counter is None:
@@ -720,6 +784,7 @@ class GINTSelectedAOPairColumnProvider:
         self.direct_scf_tol = float(direct_scf_tol)
         self.group_size = group_size
         self.max_batch_size = max_batch_size
+        self.column_kernel = column_kernel
         self.omega = float(omega)
         self.transfer_counter = transfer_counter
         self._transfer_bytes = {"h2d": {}, "d2h": {}}
@@ -939,6 +1004,7 @@ class GINTSelectedAOPairColumnProvider:
             transfer_complete
             and self._basis_prod_cache_abi["verified"]
             and self._runtime_gate["validated"]
+            and self.column_kernel == "reference"
         )
 
         self.batch_calls = 0
@@ -946,6 +1012,11 @@ class GINTSelectedAOPairColumnProvider:
         self.diagonal_calls = 0
         self.cabi_calls = 0
         self.kernel_launches = 0
+        self.constant_cache_copies = 0
+        self.column_gout_evaluations = 0
+        self.reference_column_gout_evaluations = 0
+        self.diagonal_gout_evaluations = 0
+        self.precutoff_column_gout_attempts = 0
         self._maximum_batch_observed = 0
         self._diagonal = None
 
@@ -1140,9 +1211,66 @@ class GINTSelectedAOPairColumnProvider:
         if performed not in (0, 1):
             raise RuntimeError("selected GINT returned an invalid constant-copy status")
         if performed:
+            self.constant_cache_copies = (
+                int(getattr(self, "constant_cache_copies", 0)) + 1
+            )
             self._record_transfer(
                 "h2d", "selected_gint_constant_cache", _BPCACHE_CONSTANT_BYTES
             )
+
+    def _column_gout_counts(
+        self,
+        *,
+        cp_ij_id: int,
+        cp_kl_id: int,
+        selected_pairs: np.ndarray,
+    ) -> tuple[int, int]:
+        """Count GOUT builds implied by one successful columns launch.
+
+        This mirrors the kernel's Schwarz cutoff on the immutable host
+        schedule.  The values are deterministic operation counts, not timing
+        estimates.  ``reference`` counts every selected pivot; ``grouped``
+        counts each distinct ket shell task once for every surviving row task.
+        """
+
+        row_start = int(self.schedule.cp_task_offsets[cp_ij_id])
+        row_stop = int(self.schedule.cp_task_offsets[cp_ij_id + 1])
+        ket_start = int(self.schedule.cp_task_offsets[cp_kl_id])
+        row_log_q = self.schedule.task_log_q[row_start:row_stop]
+        local_task_ids = self.schedule.pair_task_id[selected_pairs]
+        ket_log_q = self.schedule.task_log_q[ket_start + local_task_ids]
+        log_cutoff = float(np.log(self.direct_scf_tol))
+        reference = int(np.count_nonzero(
+            row_log_q[:, None] + ket_log_q[None, :] >= log_cutoff
+        ))
+        if self.column_kernel == "reference":
+            return reference, reference
+        unique_ket_log_q = ket_log_q[
+            np.concatenate((
+                np.ones(1, dtype=bool),
+                local_task_ids[1:] != local_task_ids[:-1],
+            ))
+        ]
+        grouped = int(np.count_nonzero(
+            row_log_q[:, None] + unique_ket_log_q[None, :] >= log_cutoff
+        ))
+        return reference, grouped
+
+    def _diagonal_gout_count(
+        self,
+        *,
+        cp_id: int,
+        selected_pairs: np.ndarray,
+        group_diagonal: int,
+    ) -> int:
+        task_start = int(self.schedule.cp_task_offsets[cp_id])
+        task_ids = self.schedule.pair_task_id[selected_pairs]
+        log_q = self.schedule.task_log_q[task_start + task_ids]
+        symmetrize = self.schedule.pair_symmetrize[selected_pairs]
+        return int(np.count_nonzero(
+            (2.0 * log_q >= float(np.log(self.direct_scf_tol)))
+            & (symmetrize != int(group_diagonal))
+        ))
 
     def columns(self, pivots: Iterable[int]):
         pivots = _normalise_selected_pairs(
@@ -1166,11 +1294,13 @@ class GINTSelectedAOPairColumnProvider:
                 ).astype(np.int32, copy=False)
                 if positions.size == 0:
                     continue
-                selected_host = np.ascontiguousarray(
-                    pivots[positions], dtype=np.int32
-                )
-                selected_rows_host = np.ascontiguousarray(
-                    rows[positions], dtype=np.int32
+                selected_host, selected_rows_host, task_group_count = (
+                    _order_selected_request(
+                        pivots[positions],
+                        rows[positions],
+                        self.schedule.pair_task_id,
+                        column_kernel=self.column_kernel,
+                    )
                 )
                 selected_device = cupy.asarray(selected_host)
                 selected_rows_device = cupy.asarray(selected_rows_host)
@@ -1185,6 +1315,11 @@ class GINTSelectedAOPairColumnProvider:
                         self.schedule.cp_task_offsets[cp_ij_id]
                     ):
                         continue
+                    reference_gout, actual_gout = self._column_gout_counts(
+                        cp_ij_id=cp_ij_id,
+                        cp_kl_id=cp_kl_id,
+                        selected_pairs=selected_host,
+                    )
                     constant_copy_performed = ctypes.c_int(0)
                     error = self._columns_fn(
                         stream,
@@ -1201,6 +1336,10 @@ class GINTSelectedAOPairColumnProvider:
                             int(
                                 self._group_i[cp_ij_id]
                                 == self._group_j[cp_ij_id]
+                            )
+                            | (
+                                _GROUPED_COLUMN_FLAG
+                                if self.column_kernel == "grouped" else 0
                             )
                         ),
                         ctypes.c_double(float(np.log(self.direct_scf_tol))),
@@ -1219,6 +1358,15 @@ class GINTSelectedAOPairColumnProvider:
                             f"{_COLUMNS_SYMBOL} failed for cp groups "
                             f"({cp_ij_id}, {cp_kl_id}), error={error}"
                         )
+                    self.reference_column_gout_evaluations += reference_gout
+                    self.column_gout_evaluations += actual_gout
+                    row_task_count = int(
+                        self.schedule.cp_task_offsets[cp_ij_id + 1]
+                        - self.schedule.cp_task_offsets[cp_ij_id]
+                    )
+                    self.precutoff_column_gout_attempts += (
+                        task_group_count * row_task_count
+                    )
             self.batch_calls += 1
             self.column_calls += batch_size
             self._maximum_batch_observed = max(
@@ -1249,6 +1397,14 @@ class GINTSelectedAOPairColumnProvider:
                         int(self._scheduled_pairs_device.data.ptr)
                         + start * itemsize
                     )
+                    group_diagonal = int(
+                        self._group_i[cp_id] == self._group_j[cp_id]
+                    )
+                    diagonal_gout = self._diagonal_gout_count(
+                        cp_id=cp_id,
+                        selected_pairs=self._scheduled_pairs_host[start:stop],
+                        group_diagonal=group_diagonal,
+                    )
                     constant_copy_performed = ctypes.c_int(0)
                     error = self._diagonal_fn(
                         stream,
@@ -1258,9 +1414,7 @@ class GINTSelectedAOPairColumnProvider:
                         ctypes.c_void_p(selected_ptr),
                         ctypes.c_int(stop - start),
                         ctypes.c_int(cp_id),
-                        ctypes.c_int(
-                            int(self._group_i[cp_id] == self._group_j[cp_id])
-                        ),
+                        ctypes.c_int(group_diagonal),
                         ctypes.c_double(float(np.log(self.direct_scf_tol))),
                         ctypes.c_double(self.omega),
                         workspace,
@@ -1277,6 +1431,7 @@ class GINTSelectedAOPairColumnProvider:
                             f"{_DIAGONAL_SYMBOL} failed for cp group {cp_id}, "
                             f"error={error}"
                         )
+                    self.diagonal_gout_evaluations += diagonal_gout
                 self._diagonal = output
             return self._diagonal.copy()
 
@@ -1370,6 +1525,17 @@ class GINTSelectedAOPairColumnProvider:
             "direct_scf_tol": self.direct_scf_tol,
             "group_size": self.group_size,
             "max_batch_size": self.max_batch_size,
+            "column_kernel": self.column_kernel,
+            "column_kernel_status": (
+                "reference-qualified-by-existing-runtime-gate"
+                if self.column_kernel == "reference"
+                else "prototype-awaiting-mtu-a100-ab-gate"
+            ),
+            "gout_reuse_scope": (
+                "none-one-gout-per-row-task-and-pivot"
+                if self.column_kernel == "reference"
+                else "single-thread-contiguous-ket-shell-task-group"
+            ),
             "maximum_batch_observed": self._maximum_batch_observed,
             "omega": self.omega,
             "precision": "fp64",
@@ -1423,6 +1589,38 @@ class GINTSelectedAOPairColumnProvider:
             "diagonal_calls": self.diagonal_calls,
             "cabi_calls": self.cabi_calls,
             "kernel_launches": self.kernel_launches,
+            "constant_cache_copies": self.constant_cache_copies,
+            "gout_evaluations": int(
+                self.column_gout_evaluations + self.diagonal_gout_evaluations
+            ),
+            "column_gout_evaluations": self.column_gout_evaluations,
+            "reference_column_gout_evaluations": (
+                self.reference_column_gout_evaluations
+            ),
+            "diagonal_gout_evaluations": self.diagonal_gout_evaluations,
+            "precutoff_column_gout_attempts": (
+                self.precutoff_column_gout_attempts
+            ),
+            "operation_count_semantics": {
+                "gout_evaluations": (
+                    "post-Schwarz selected_build_gout calls implied by the "
+                    "immutable host schedule"
+                ),
+                "reference_column_gout_evaluations": (
+                    "post-Schwarz one-GOUT-per-row-task-and-pivot counterfactual"
+                ),
+                "precutoff_column_gout_attempts": (
+                    "row-task by ket-task-group combinations submitted before "
+                    "the kernel Schwarz cutoff"
+                ),
+                "constant_cache_copies": (
+                    "copies confirmed by the C-ABI output flag"
+                ),
+            },
+            "grouped_gout_evaluations_saved": int(
+                self.reference_column_gout_evaluations
+                - self.column_gout_evaluations
+            ),
             "schedule": self.schedule.metadata(),
             "explicit_transfers": self.explicit_transfer_ledger(),
         }
