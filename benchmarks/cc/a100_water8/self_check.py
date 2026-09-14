@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import statistics
 import subprocess
 import sys
 from pathlib import Path
@@ -53,10 +54,16 @@ def main() -> int:
     assert performance_claim["eligible"] is False
     assert performance_claim["ten_x_achieved"] is False
     assert performance_claim["candidate_water8_median_seconds"] is None
-    assert performance_claim["matched_canonical_water8_median_seconds"] is None
     assert performance_claim["accuracy_qualified_candidate_count"] == 0
     assert performance_claim["eligible_canonical_water8_sample_count"] == len(
         performance_claim["eligible_canonical_water8_samples_seconds"]
+    )
+    canonical_samples = performance_claim[
+        "eligible_canonical_water8_samples_seconds"
+    ]
+    assert len(canonical_samples) >= 3
+    assert performance_claim["matched_canonical_water8_median_seconds"] == (
+        statistics.median(canonical_samples)
     )
     assert performance_claim["reason"]
     assert [gate["id"] for gate in status["gates"]] == [
