@@ -16,6 +16,7 @@
 
 #include <stdlib.h>
 #include <stddef.h>
+#include <stdint.h>
 
 // #include <cint.h>
 // global parameters in env
@@ -307,5 +308,63 @@ typedef struct {
 
 typedef void (*FPtr_CPUkernel_jk)(double *g, double **dm, double **v,
                                   int *shls, GINTEnvVars *envs, int *ibuf);
+
+/*
+ * Device-resident mapping used by the bounded selected-shell-pair ERI ABI.
+ * This ABI is private to the validated Python schedule builder; it is not a
+ * general external integral API.  Every pointer in this structure addresses
+ * GPU memory.  Selected output rows must be unique and in range.  The
+ * structure itself is supplied by value to CUDA kernels after the C driver
+ * validates its version, lengths, and spherical/single-shell release flags.
+ */
+typedef struct {
+    int npair;
+    int nao_original;
+    int nbas;
+    int spherical;
+    int single_shell_support;
+    int abi_version;
+    int coeff_rows;
+    int shell_original_aos_count;
+    int task_count;
+    const double *coeff;
+    const int *shell_original_offsets;
+    const int *shell_original_aos;
+    const int *pair_i;
+    const int *pair_j;
+    const int *pair_cp_id;
+    const int *pair_task_id;
+    const unsigned char *pair_symmetrize;
+    const double *task_log_q;
+} GINTSelectedPairData;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+size_t GINTsizeof_basis_prod_cache(void);
+size_t GINTsizeof_selected_pair_data(void);
+size_t GINToffsetof_selected_pair_data(int field_index);
+int GINTselected_pair_data_abi_version(void);
+size_t GINTselected_workspace_size(int maximum_rys_order,
+                                   int multiprocessor_count);
+
+int GINTfill_selected_int2e_columns(
+    void *stream, BasisProdCache *bpcache,
+    const GINTSelectedPairData *data, double *columns, int batch_size,
+    const int *selected_pairs, const int *selected_rows, int selected_count,
+    int cp_ij_id, int cp_kl_id, int row_group_diagonal,
+    double log_cutoff, double omega, void *workspace, size_t workspace_bytes,
+    int *constant_copy_performed);
+
+int GINTfill_selected_int2e_diagonal(
+    void *stream, BasisProdCache *bpcache,
+    const GINTSelectedPairData *data, double *diagonal,
+    const int *selected_pairs, int selected_count, int cp_id,
+    int group_diagonal, double log_cutoff, double omega,
+    void *workspace, size_t workspace_bytes,
+    int *constant_copy_performed);
+#ifdef __cplusplus
+}
+#endif
 
 #endif

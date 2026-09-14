@@ -36,6 +36,11 @@
 #include "g3c2e_ip2.cu"
 */
 extern "C" { __host__
+size_t GINTsizeof_basis_prod_cache(void)
+{
+    return sizeof(BasisProdCache);
+}
+
 void GINTdel_basis_prod(BasisProdCache **pbp)
 {
     BasisProdCache *bpcache = *pbp;
@@ -111,4 +116,3 @@ void GINTinit_basis_prod(BasisProdCache **pbp, double diag_fac, int *ao_loc,
     bpcache->bas_pair2ket = d_bas_pair2shls + n_bas_pairs;
 }
 }
-

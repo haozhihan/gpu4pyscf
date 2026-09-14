@@ -46,7 +46,8 @@ def cart2sph_by_l(l, normalized='sp'):
         _c2s[l,device_id,normalized] = cp.asarray(c2s, order='C')
     return _c2s[l,device_id,normalized]
 
-def basis_seg_contraction(mol, allow_replica=1, sparse_coeff=False):
+def basis_seg_contraction(
+        mol, allow_replica=1, sparse_coeff=False, *, transfer_audit=None):
     '''transform generally contracted basis to segment contracted basis.
     Note return_mol.cart is set to True.
 
@@ -75,9 +76,19 @@ def basis_seg_contraction(mol, allow_replica=1, sparse_coeff=False):
     else:
         c2s = [gto.mole.cart2sph(l, normalized='sp') for l in range(lmax+1)]
     c2s_gpu = [asarray(c, order='C') for c in c2s]
+    if transfer_audit is not None:
+        transfer_audit.record_transfer(
+            'h2d', 'basis_c2s_blocks',
+            sum(int(c.nbytes) for c in c2s),
+            count=len(c2s),
+            logical_payload='one Cartesian-to-spherical coefficient block per angular momentum',
+            provenance='gpu4pyscf.gto.mole.basis_seg_contraction:c2s_gpu',
+        )
     _bas = []
     _env = mol._env.copy()
     contr_coeff = []
+    high_l_decontraction_bytes = 0
+    high_l_decontraction_count = 0
     aoslices = mol.aoslice_by_atom()
     for ia, (ib0, ib1) in enumerate(aoslices[:,:2]):
         key = tuple(mol._bas[ib0:ib1,PTR_COEFF])
@@ -113,7 +124,10 @@ def basis_seg_contraction(mol, allow_replica=1, sparse_coeff=False):
                     # remove normalization from contraction coefficients
                     c = _env[pcoeff:pcoeff+nprim*nctr].reshape(nctr,nprim)
                     c = np.einsum('ip,p,fe->pfie', c, 1/norm, c2s[l])
-                    coeff.append(asarray(c.reshape(nf*nprim,-1), order='C'))
+                    c = c.reshape(nf*nprim, -1)
+                    coeff.append(asarray(c, order='C'))
+                    high_l_decontraction_bytes += int(c.nbytes)
+                    high_l_decontraction_count += 1
 
                     _env[pcoeff:pcoeff+nprim] = norm
                     bs = np.repeat(shell[np.newaxis], nprim, axis=0)
@@ -138,8 +152,21 @@ def basis_seg_contraction(mol, allow_replica=1, sparse_coeff=False):
     pmol._bas = np.asarray(np.vstack(_bas), dtype=np.int32)
     pmol._env = _env
 
+    if transfer_audit is not None:
+        transfer_audit.record_transfer(
+            'h2d', 'basis_high_l_decontraction_blocks',
+            high_l_decontraction_bytes,
+            count=high_l_decontraction_count,
+            logical_payload='high-l primitive decontraction coefficient blocks',
+            provenance='gpu4pyscf.gto.mole.basis_seg_contraction:high_l_decontraction',
+        )
+
     if not sparse_coeff:
-        contr_coeff = block_diag(contr_coeff)
+        contr_coeff = block_diag(
+            contr_coeff,
+            transfer_audit=transfer_audit,
+            audit_prefix='basis_block_diag',
+        )
         return pmol, contr_coeff
     else:
         return pmol, None

@@ -448,8 +448,11 @@ class _VHFOpt:
     from gpu4pyscf.lib.utils import to_cpu, to_gpu, device
 
     def __init__(self, mol, intor, prescreen='CVHFnoscreen',
-                 qcondname='CVHFsetnr_direct_scf', dmcondname=None):
-        self.mol, self.coeff = basis_seg_contraction(mol)
+                 qcondname='CVHFsetnr_direct_scf', dmcondname=None,
+                 transfer_audit=None):
+        self.transfer_audit = transfer_audit
+        self.mol, self.coeff = basis_seg_contraction(
+            mol, transfer_audit=transfer_audit)
         self.coeff = cupy.asarray(self.coeff)
         # Note mol._bas will be sorted in .build() method. VHFOpt should be
         # initialized after mol._bas updated.
@@ -485,7 +488,22 @@ class _VHFOpt:
         assert nao < 32768
         ao_idx = np.array_split(np.arange(nao), ao_loc[1:-1])
         ao_idx = np.hstack([ao_idx[i] for i in sorted_idx])
-        self.coeff = self.coeff[ao_idx]
+        ao_idx = np.ascontiguousarray(ao_idx, dtype=np.int32)
+        ao_idx_device = cupy.asarray(ao_idx)
+        if self.transfer_audit is not None:
+            self.transfer_audit.record_transfer(
+                'h2d', 'vhfopt_ao_sort_index', int(ao_idx.nbytes), count=1,
+                logical_payload='sorted Cartesian AO permutation',
+                provenance='gpu4pyscf.scf.int4c2e._VHFOpt.build:ao_idx_device',
+            )
+        self.coeff = self.coeff[ao_idx_device]
+        if self.transfer_audit is not None:
+            self.transfer_audit.record_device_payload(
+                'vhfopt_sorted_coeff', int(self.coeff.nbytes),
+                logical_payload='AO-sorted segmented-basis coefficient matrix',
+                provenance='gpu4pyscf.scf.int4c2e._VHFOpt.build:device_advanced_index',
+                origin='device-generated',
+            )
         # Sort basis inplace
         mol._bas = mol._bas[sorted_idx]
 
@@ -510,6 +528,8 @@ class _VHFOpt:
         q_cond = self.get_q_cond()
         cput1 = logger.timer(mol, 'Initialize q_cond', *cput0)
         log_qs = []
+        log_q_h2d_bytes = 0
+        log_q_h2d_count = 0
         pair2bra = []
         pair2ket = []
         bins = []
@@ -542,7 +562,10 @@ class _VHFOpt:
                 pair2ket.append(jshs)
                 bins.append(_make_bins(s_index, nbins=nbins))
                 bins_floor.append(bin_floor)
-                log_qs.append(cupy.asarray(log_q[idx]))
+                log_q_host = np.ascontiguousarray(log_q[idx], dtype=np.float64)
+                log_qs.append(cupy.asarray(log_q_host))
+                log_q_h2d_bytes += int(log_q_host.nbytes)
+                log_q_h2d_count += 1
 
             q_sub = q_cond[p0:p1,p0:p1]
             idx = np.argwhere(q_sub > cutoff)
@@ -569,7 +592,10 @@ class _VHFOpt:
             pair2ket.append(jshs)
             bins.append(_make_bins(s_index, nbins=nbins))
             bins_floor.append(bin_floor)
-            log_qs.append(cupy.asarray(log_q[idx]))
+            log_q_host = np.ascontiguousarray(log_q[idx], dtype=np.float64)
+            log_qs.append(cupy.asarray(log_q_host))
+            log_q_h2d_bytes += int(log_q_host.nbytes)
+            log_q_h2d_count += 1
 
         # TODO
         self.pair2bra = pair2bra
@@ -584,7 +610,14 @@ class _VHFOpt:
         self.bins = bins
         self.bins_floor = bins_floor
         self.log_qs = log_qs
-        ao_loc = mol.ao_loc_nr(cart=True)
+        if self.transfer_audit is not None:
+            self.transfer_audit.record_transfer(
+                'h2d', 'vhfopt_log_q', log_q_h2d_bytes,
+                count=log_q_h2d_count,
+                logical_payload='screened and sorted shell-pair log_q arrays',
+                provenance='gpu4pyscf.scf.int4c2e._VHFOpt.build:log_qs',
+            )
+        ao_loc = np.ascontiguousarray(mol.ao_loc_nr(cart=True), dtype=np.int32)
         ncptype = len(log_qs)
         self.bpcache = ctypes.POINTER(BasisProdCache)()
         if diag_block_with_triu:
@@ -599,6 +632,52 @@ class _VHFOpt:
             mol._atm.ctypes.data_as(ctypes.c_void_p), ctypes.c_int(mol.natm),
             mol._bas.ctypes.data_as(ctypes.c_void_p), ctypes.c_int(mol.nbas),
             mol._env.ctypes.data_as(ctypes.c_void_p))
+        if self.transfer_audit is not None:
+            nbas = int(mol.nbas)
+            n_bas_pairs = int(self.bas_pairs_locs[-1])
+            n_primitive_pairs = sum(
+                int(mol._bas[int(ish), gto.NPRIM_OF])
+                * int(mol._bas[int(jsh), gto.NPRIM_OF])
+                for bra, ket in zip(self.pair2bra, self.pair2ket)
+                for ish, jsh in zip(bra, ket)
+            )
+            basis_cache_payloads = (
+                (
+                    'gint_basis_cache_ao_loc', int(ao_loc.nbytes),
+                    'sorted Cartesian AO shell offsets',
+                    'gpu4pyscf.lib.gint.bpcache.GINTinit_basis_prod:DEVICE_INIT(ao_loc)',
+                ),
+                (
+                    'gint_basis_cache_bas_coords',
+                    3 * nbas * np.dtype(np.float64).itemsize,
+                    'three FP64 center coordinates per sorted basis shell',
+                    'gpu4pyscf.lib.gint.bpcache.GINTinit_basis_prod:DEVICE_INIT(bas_coords)',
+                ),
+                (
+                    'gint_basis_cache_bas_atm',
+                    nbas * np.dtype(np.int32).itemsize,
+                    'atom index per sorted basis shell',
+                    'gpu4pyscf.lib.gint.bpcache.GINTinit_basis_prod:DEVICE_INIT(bas_atm)',
+                ),
+                (
+                    'gint_basis_cache_aexyz',
+                    7 * n_primitive_pairs * np.dtype(np.float64).itemsize,
+                    'seven FP64 primitive-pair fields a/e/x/y/z/a1/a2',
+                    'gpu4pyscf.lib.gint.bpcache.GINTinit_basis_prod:DEVICE_INIT(aexyz)',
+                ),
+                (
+                    'gint_basis_cache_bas_pair2shls',
+                    2 * n_bas_pairs * np.dtype(np.int32).itemsize,
+                    'bra and ket shell indices for each screened basis pair',
+                    'gpu4pyscf.lib.gint.bpcache.GINTinit_basis_prod:DEVICE_INIT(bas_pair2shls)',
+                ),
+            )
+            for operation, nbytes, logical_payload, provenance in basis_cache_payloads:
+                self.transfer_audit.record_transfer(
+                    'h2d', operation, int(nbytes), count=1,
+                    logical_payload=logical_payload,
+                    provenance=provenance,
+                )
         logger.timer(mol, 'Initialize GPU cache', *cput1)
         return self
 

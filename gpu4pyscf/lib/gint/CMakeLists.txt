@@ -21,6 +21,7 @@ add_library(gint SHARED
   bpcache.cu
   constant.cu
   nr_fill_ao_ints.cu
+  selected_columns.cu
   nr_fill_ao_int3c1e.cu
   nr_fill_ao_int3c1e_ip.cu
   nr_fill_ao_int3c1e_ipip.cu
