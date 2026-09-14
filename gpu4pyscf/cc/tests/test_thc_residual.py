@@ -284,7 +284,9 @@ def test_arbitrary_rr_pair_factor_matches_dense_equations_term_by_term():
         "Loo_Lvv", "Loo_T1vv", "T1oo_Lvv", "T1oo_T1vv"
     }
     assert set(ledger) == {
-        "woooo_factorized", "wvvvv_factorized", "ring_mixed"
+        "algorithm_1_occupied_quadratic",
+        "algorithm_1_virtual_quadratic",
+        "algorithm_1_cross_plus_2_plus_3",
     }
     for value in tuple(p1.values()) + tuple(p3.values()):
         assert value.shape == observed.algorithm_1.shape
@@ -296,13 +298,13 @@ def test_arbitrary_rr_pair_factor_matches_dense_equations_term_by_term():
     occupied = np.einsum("iaX,Aki,kaY->AXY", u, transformed.hoo, u)
     virtual = np.einsum("iaX,Aac,icY->AXY", u, transformed.hvv, u)
     expected_ledger = {
-        "woooo_factorized": np.einsum(
+        "algorithm_1_occupied_quadratic": np.einsum(
             "AXY,YZ,AWZ->XW", occupied, core, occupied
         ),
-        "wvvvv_factorized": np.einsum(
+        "algorithm_1_virtual_quadratic": np.einsum(
             "AXY,YZ,AWZ->XW", virtual, core, virtual
         ),
-        "ring_mixed": -(
+        "algorithm_1_cross_plus_2_plus_3": -(
             np.einsum("AXY,YZ,AWZ->XW", occupied, core, virtual)
             + np.einsum("AXY,YZ,AWZ->XW", virtual, core, occupied)
         ) + expected[1] + expected[2],
@@ -370,9 +372,17 @@ def test_thc_provenance_preserves_separable_endpoint_and_records_metadata():
     assert metadata["coarse_r123_audit_ledger"] is True
     assert metadata["coarse_r123_ledger_kind"] == "audit-only"
     assert metadata["coarse_r123_diagram_partition_fused"] is False
-    assert metadata["performance_eligible"] is False
+    assert metadata["coarse_ledger_performance_eligible"] is False
+    assert "performance_eligible" not in metadata
+    assert metadata["coarse_ledger_largest_intermediate_scope"] == (
+        "largest-single-logical-array"
+    )
+    assert metadata["coarse_ledger_retained_nbytes"] > 0
+    assert metadata["coarse_ledger_peak_memory_requires_profiling"] is True
     assert metadata["coarse_ledger_buckets"] == [
-        "woooo_factorized", "wvvvv_factorized", "ring_mixed"
+        "algorithm_1_occupied_quadratic",
+        "algorithm_1_virtual_quadratic",
+        "algorithm_1_cross_plus_2_plus_3",
     ]
     np.testing.assert_allclose(
         sum(observed.coarse_ledger.values()),
@@ -406,6 +416,44 @@ def test_thc_provenance_preserves_separable_endpoint_and_records_metadata():
         + zero_t1_result.algorithm_2
         + zero_t1_result.algorithm_3,
         atol=3e-9,
+    )
+
+
+def test_coarse_third_bucket_keeps_bare_ovov_driver_separate_from_ring():
+    t1, _factors, loo, lov, lvv, y_occ, y_vir, _core = _problem(215)
+    zero_t1 = np.zeros_like(t1)
+    zero_core = np.zeros((y_occ.shape[1], y_occ.shape[1]))
+    result = thc_residual_algorithms_1_3(
+        y_occ,
+        y_vir,
+        zero_core,
+        zero_t1,
+        loo,
+        lov,
+        lvv,
+        auxiliary_block_size=2,
+        record_provenance=True,
+    )
+    # At t1=0 and C=0, A1 and A3 vanish while Algorithm 2 retains the
+    # core-independent bare ovov driver abar.T@abar.  Thus the neutral third
+    # bucket is nonzero and must not be called a projected CC ring term.
+    np.testing.assert_allclose(result.algorithm_1, 0.0, atol=1e-13)
+    np.testing.assert_allclose(result.algorithm_3, 0.0, atol=1e-13)
+    assert np.max(np.abs(result.algorithm_2)) > 1e-8
+    np.testing.assert_allclose(
+        result.coarse_ledger["algorithm_1_occupied_quadratic"],
+        0.0,
+        atol=1e-13,
+    )
+    np.testing.assert_allclose(
+        result.coarse_ledger["algorithm_1_virtual_quadratic"],
+        0.0,
+        atol=1e-13,
+    )
+    np.testing.assert_allclose(
+        result.coarse_ledger["algorithm_1_cross_plus_2_plus_3"],
+        result.algorithm_2,
+        atol=2e-12,
     )
 
 

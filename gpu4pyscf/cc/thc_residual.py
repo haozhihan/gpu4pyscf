@@ -98,6 +98,7 @@ class THCResidual123Result:
     provenance_largest_intermediate_nbytes: int = 0
     coarse_ledger: Optional[dict[str, Any]] = None
     coarse_ledger_largest_intermediate_nbytes: int = 0
+    coarse_ledger_retained_nbytes: int = 0
 
     def to_rr(self, tau: Any):
         """Return ``tau @ sigma_thc @ tau.T`` in the RR working basis."""
@@ -131,11 +132,18 @@ class THCResidual123Result:
             "coarse_ledger_available": coarse_available,
             "coarse_r123_ledger_kind": "audit-only",
             "coarse_r123_diagram_partition_fused": False,
-            "performance_eligible": False,
+            "coarse_ledger_performance_eligible": False,
             "coarse_ledger_largest_intermediate_nbytes": int(
                 self.coarse_ledger_largest_intermediate_nbytes
             ),
+            "coarse_ledger_largest_intermediate_scope": (
+                "largest-single-logical-array"
+            ),
+            "coarse_ledger_retained_nbytes": int(
+                self.coarse_ledger_retained_nbytes
+            ),
             "coarse_ledger_memory_scope": "reported-separately",
+            "coarse_ledger_peak_memory_requires_profiling": True,
             "coarse_ledger_buckets": (
                 list(self.coarse_ledger)
                 if self.coarse_ledger is not None
@@ -179,6 +187,7 @@ class PairFactorResidual123Result:
     provenance_largest_intermediate_nbytes: int = 0
     coarse_ledger: Optional[dict[str, Any]] = None
     coarse_ledger_largest_intermediate_nbytes: int = 0
+    coarse_ledger_retained_nbytes: int = 0
 
     def metadata(self) -> dict[str, Any]:
         available = (
@@ -212,11 +221,18 @@ class PairFactorResidual123Result:
             "coarse_ledger_available": coarse_available,
             "coarse_r123_ledger_kind": "audit-only",
             "coarse_r123_diagram_partition_fused": False,
-            "performance_eligible": False,
+            "coarse_ledger_performance_eligible": False,
             "coarse_ledger_largest_intermediate_nbytes": int(
                 self.coarse_ledger_largest_intermediate_nbytes
             ),
+            "coarse_ledger_largest_intermediate_scope": (
+                "largest-single-logical-array"
+            ),
+            "coarse_ledger_retained_nbytes": int(
+                self.coarse_ledger_retained_nbytes
+            ),
             "coarse_ledger_memory_scope": "reported-separately",
+            "coarse_ledger_peak_memory_requires_profiling": True,
             "coarse_ledger_buckets": (
                 list(self.coarse_ledger)
                 if self.coarse_ledger is not None
@@ -417,28 +433,32 @@ def _coarse_r123_ledger(
     algorithm_2: Any,
     algorithm_3: Any,
 ):
-    """Build audit-only coarse buckets from projected Hoo/Hvv factors.
+    """Build audit-only algebraic buckets from projected Hoo/Hvv factors.
 
     With ``O`` and ``V`` the projected Hoo and Hvv factors, respectively,
     Algorithm 1 is ``(O-V) C (O-V)``.  The first two buckets retain its pure
-    ``OCO`` and ``VCV`` pieces.  The mixed bucket contains the two Algorithm 1
+    ``OCO`` and ``VCV`` pieces.  The third bucket contains the two Algorithm 1
     cross terms and the complete Algorithms 2 and 3 contributions.  This is
-    an accounting ledger only; it does not assert that these buckets are the
-    production PySCF Woooo/Wvvvv/ring diagram partition.
+    an algebraic accounting ledger only; the bucket names do not identify
+    production PySCF Woooo/Wvvvv/ring diagram groups.
     """
 
     xp = _array_module(occupied)
-    woooo = xp.einsum("AXY,YZ,AWZ->XW", occupied, core, occupied)
-    wvvvv = xp.einsum("AXY,YZ,AWZ->XW", virtual, core, virtual)
-    ring_mixed = -(
+    occupied_quadratic = xp.einsum(
+        "AXY,YZ,AWZ->XW", occupied, core, occupied
+    )
+    virtual_quadratic = xp.einsum(
+        "AXY,YZ,AWZ->XW", virtual, core, virtual
+    )
+    cross_plus_2_plus_3 = -(
         xp.einsum("AXY,YZ,AWZ->XW", occupied, core, virtual)
         + xp.einsum("AXY,YZ,AWZ->XW", virtual, core, occupied)
     )
-    ring_mixed += algorithm_2 + algorithm_3
+    cross_plus_2_plus_3 += algorithm_2 + algorithm_3
     ledger = {
-        "woooo_factorized": woooo,
-        "wvvvv_factorized": wvvvv,
-        "ring_mixed": ring_mixed,
+        "algorithm_1_occupied_quadratic": occupied_quadratic,
+        "algorithm_1_virtual_quadratic": virtual_quadratic,
+        "algorithm_1_cross_plus_2_plus_3": cross_plus_2_plus_3,
     }
     largest = max(
         int(value.nbytes) for value in (occupied, virtual, *ledger.values())
@@ -758,6 +778,11 @@ def pair_factor_residual_algorithms_1_3(
             transformed.storage_nbytes,
             block_largest,
         )
+    coarse_retained = (
+        0
+        if coarse_ledger is None
+        else sum(int(value.nbytes) for value in coarse_ledger.values())
+    )
     return PairFactorResidual123Result(
         sigma_pair=sigma1 + sigma2 + sigma3,
         algorithm_1=sigma1,
@@ -772,6 +797,7 @@ def pair_factor_residual_algorithms_1_3(
         provenance_largest_intermediate_nbytes=provenance_largest,
         coarse_ledger=coarse_ledger,
         coarse_ledger_largest_intermediate_nbytes=coarse_largest,
+        coarse_ledger_retained_nbytes=coarse_retained,
     )
 
 
@@ -916,6 +942,11 @@ def thc_residual_algorithms_1_3(
             int(part3.nbytes),
         )
     total = sigma1 + sigma2 + sigma3
+    coarse_retained = (
+        0
+        if coarse_ledger is None
+        else sum(int(value.nbytes) for value in coarse_ledger.values())
+    )
     return THCResidual123Result(
         sigma_thc=total,
         algorithm_1=sigma1,
@@ -928,6 +959,7 @@ def thc_residual_algorithms_1_3(
         provenance_largest_intermediate_nbytes=provenance_largest,
         coarse_ledger=coarse_ledger,
         coarse_ledger_largest_intermediate_nbytes=coarse_largest,
+        coarse_ledger_retained_nbytes=coarse_retained,
     )
 
 

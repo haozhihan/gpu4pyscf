@@ -323,6 +323,16 @@ def test_fused_r123_matches_independent_terms_and_transforms_each_block_once(
     assert metadata["r123_evaluation_count"] == 2
     assert metadata["coarse_r123_diagram_partition_fused"] is False
     assert metadata["performance_eligible"] is False
+    for result in (fused.exact_rr, fused.thc):
+        child_metadata = result.metadata()
+        assert child_metadata["provenance_available"] is False
+        assert child_metadata["coarse_ledger_available"] is False
+        assert child_metadata["algorithm_1_provenance"] == []
+        assert child_metadata["algorithm_3_provenance"] == []
+        assert child_metadata["coarse_ledger_buckets"] == []
+        assert child_metadata["provenance_largest_intermediate_nbytes"] == 0
+        assert child_metadata["coarse_ledger_retained_nbytes"] == 0
+        assert "performance_eligible" not in child_metadata
 
 
 def test_fused_complement_recombines_without_complete_rr_wrapper(monkeypatch):
