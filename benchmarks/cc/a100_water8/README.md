@@ -127,13 +127,53 @@ The driver supports seven explicit method labels:
 The paper-equation boundary and staged Algorithms 4--10 acceptance rules are
 recorded in [thc-direct-complement.md](thc-direct-complement.md).
 
+The THC audit implementation is current through commit `7399a87`. Commit
+`a1adb89` supplies the provenance-bound T1-transformed F-hat builder; `4b09acd`
+runs the joint Omega-C/Omega-D audit and records that the current Eq. 35 versus
+Eq. 37/Appendix-line-22 conventions remain unequal even for physical
+pair-symmetric gauges; `85a3592` confines legacy complete-graph metadata to the
+current RR coarse graph; and `5987560` assembles Algorithms 1--10 from zero with
+one doubles back-projection. Commit `7399a87` adds the missing physical pair
+transpose to Algorithm 7 during complete assembly. Across six exact full-pair
+FP64 cases, including nonzero T1 and both Algorithms 4+5 and Algorithm 6 paths,
+this reduces the maximum doubles total-identity error from `7.746556e-3` to
+`1.38778e-16`; the maximum singles error is `5.55112e-17`, and the maximum
+Algorithm 6 minus Algorithms 4+5 error is `3.46945e-18`. This establishes the
+assembled full-pair total identity for those fixtures, but it does not establish
+the literal Eq. 35 mapping. The assembler remains an audit endpoint, and all
+direct-paper complete, accepted, formal, production, and performance flags are
+false.
+
 Every reduced-rank or THC record states its validation status and remains
 performance-ineligible until the corresponding numerical, allocation, and
 A100 timing gates pass.  `--rr-ring-kernel reference|gemm` selects the RR ring
-validation kernel for RR methods.  The GEMM path is opt-in and is recorded as
-pending its A100 numerical/allocation gate; THC uses a separate residual engine
-and rejects `--rr-ring-kernel gemm` rather than silently ignoring it.  No
+validation kernel for RR methods. Job 62676, from the earlier `77a1b7c` source,
+supplies a one-cycle WATER4 reference/GEMM A/B. Its ring times are within 5%,
+so the declared tie rule selects the GEMM/cuBLAS path if a revised RR route
+returns to a converged backend comparison. Commit `64d6c55` then makes that
+GEMM implementation choose residual-first or right-project-first matrix chains
+independently for each actual full or tail tile, allowing the latter only when
+it uses fewer scalar multiplies without exceeding the residual-first logical
+temporary peak; the fourth Wvovo contraction retains its separate bounded
+chain. Job 62676 predates this adaptive selector, which still needs an A100
+numerical/allocation check.
+
+Commit `30ddc82` additionally fuses the two projected Wvvvv ladders through the
+exact symmetric bilinear identity
+`sym(X @ sym(core) @ (X - 2Y).T)`. It caps each fused auxiliary subblock at
+half the actual outer-block width so the two simultaneously live rank-square
+transforms remain within the previous one-transform allowance; a singleton
+tail uses the sequential path. Exact algebra and local tests pass, including
+the workspace ledger. The fused kernel still needs A100 numerical, allocation,
+and performance gates, and it cannot repair job 62674's energy failures. These
+kernel choices remain performance-ineligible. THC uses a separate residual
+engine and rejects `--rr-ring-kernel gemm` rather than silently ignoring it. No
 speedup claim is made by this harness.
+
+A clean local release worktree at `release-30ddc82a33ea` passed 1023 tests
+with 74 environment skips. The upstream `gpu4pyscf/cc/tests/test_ccsd.py` was
+excluded because local PySCF is unavailable. This validates the local source
+state; it does not replace the pending A100 gates.
 
 Use `--dry-run` to inspect the full method/config plan without importing GPU
 libraries or running SCF:
@@ -395,8 +435,9 @@ python benchmarks/cc/a100_water8/fno_g2.py analyze \
 
 For each threshold the analysis reports complete post-HF time and speedup,
 phase totals, active virtual count, the full/FNO MP2 energies and Delta-MP2,
-the Delta-MP2-corrected CCSD correlation error, active-space residual, HBM and
-host RSS, and the shared-bundle counterpoise error. It checks the algebraic
+the Delta-MP2-corrected CCSD correlation error, active-space residual, HBM, and
+host RSS. CP-enabled stages separately report the shared-bundle counterpoise
+error; the WATER4 stage has no CP calculation. The analysis checks the algebraic
 identity `Delta-MP2 = E_MP2(full) - E_MP2(FNO)` and the corresponding corrected
 CCSD energies. The water8 candidate list is emitted only when all seven
 threshold records are present and both the first loose-to-tight passing point
@@ -404,6 +445,193 @@ and its immediately tighter neighbour independently satisfy `1e-4 Eh`,
 `0.02 kcal/mol`, residual, resource, exact-orbital, immutable-source, hardware,
 and positive water4 speedup gates. This is a development probe; final timing
 still uses three interleaved fresh-process baseline/candidate pairs.
+
+The WATER4 gate itself tests correlation energy, equation convergence,
+resources, and complete-iteration speed. The formal eight-ghost-monomer
+counterpoise calculation is a WATER8 gate and is not part of WATER4. The
+historical WATER2 FNO screen below used its separate two-monomer CP probe.
+
+### Current development FNO screening
+
+Jobs 62630--62633 ran a non-formal screening on idle A100 development nodes
+from source `b29a65a`. These timings cannot enter the fixed-node performance
+claim, but they are sufficient to apply the WATER4 stop rule:
+
+| threshold | WATER4 frozen virtuals | abs. correlation error (Eh) | post-HF (s) | WATER4 decision |
+|---:|---:|---:|---:|---|
+| `3e-5` | 33 / 212 | `9.3776e-4` | 53.278 | energy fails |
+| `1e-5` | 4 / 212 | `5.7596e-5` | 56.355 | accurate but slower than canonical |
+| `3e-6` | 0 / 212 | `1.5209e-8` | 58.559 | accurate but no compression and slower |
+
+The earlier, separate WATER2 CP probe measured `0.024753 kcal/mol` at `1e-5`
+and `0.001417 kcal/mol` at `3e-6`. It is historical small-case screening and
+does not replace the eight-ghost-monomer WATER8 CP gate.
+
+The paired WATER4 canonical observation was 35.433 s. Every tested FNO
+candidate was slower, and threshold `3e-6` froze no WATER4 virtual orbitals.
+Separately, the WATER2 CP probe rejected `1e-5`. The current FNO route therefore
+stops before WATER8; it remains a speed/error probe and is not a candidate for
+combination with THC-RR. Formal immutable-source repetition would be required
+before changing this conclusion into an acceptance claim.
+
+### Current development RR screening
+
+Jobs 62635, 62637, and 62652 are historical non-formal WATER2 diagnostics from
+source `b29a65a`. Job 62637 exposed that the old dense `rr_canonical` update
+projected a canonical Jacobi step after dividing by the full-space orbital
+denominator, and therefore solved `U^T D^-1 R U = 0` instead of the declared
+Galerkin equation `U^T R U = 0`. Commit `5056c8d` replaced it with the projected
+Sylvester solve. Job 62653 repeated the complete cutoff grid from immutable
+development source `77a1b7c` on an idle A100 and completed with zero record
+failures. Its development summary SHA-256 is
+`28dfbc5c4db855dfd32ce4d1414726c631deafd40e48a397a5429f9d73f14171`:
+
+| RR cutoff | rank / 1060 | abs. correlation error (Eh) | projected equation residual | reconstructed full-space residual | post-HF (s) |
+|---:|---:|---:|---:|---:|---:|
+| `1e-3` | 164 | `1.771860e-3` | `9.090670e-8` | `9.764681e-2` | 10.1394 |
+| `1e-4` | 276 | `1.614381e-3` | `9.134555e-8` | `7.239172e-2` | 11.0735 |
+| `1e-5` | 374 | `1.422687e-3` | `1.419348e-7` | `5.180226e-2` | 11.2621 |
+| `1e-6` | 494 | `6.831544e-4` | `1.312658e-7` | `3.348634e-2` | 11.6680 |
+| `1e-7` | 604 | `9.002584e-5` | `1.566310e-7` | `1.793478e-2` | 12.5574 |
+| `1e-8` | 719 | `1.261283e-5` | `1.270087e-7` | `8.875755e-3` | 13.8979 |
+| `1e-9` | 828 | `1.141377e-7` | `6.333480e-7` | `5.856294e-3` | 12.6359 |
+| `1e-11` | 965 | `3.086201e-8` | `6.876099e-7` | `1.107442e-3` | 12.8286 |
+
+The first loose-to-tight WATER2 point that satisfies both the `1e-4 Eh`
+energy gate and the `1e-6` projected-equation gate is `1e-7`, rank 604; its
+immediately tighter neighbour is `1e-8`, rank 719. Both ranks are below the
+`0.8 * OV = 848` stop boundary, so they advance to the WATER4 accuracy gate.
+The full-space values above are approximation diagnostics and are not used as
+the compressed-equation convergence criterion. Job 62637 is retained only as
+superseded defect evidence; its energy and projected residual must not be mixed
+with the corrected job 62653 grid.
+
+The full-rank `rr_canonical` endpoint in job 62652 remains a separate algebraic
+gate. It matches canonical correlation energy within `8.55e-15 Eh`,
+reconstructed `t2` within `1.58e-15` max abs., and has equal projected/full
+equation residuals of `6.8950e-7`.
+
+The direct-CD Galerkin engine in job 62635 gives the same cutoff-`1e-5` energy
+as the corrected canonical-ERI engine within `1.61e-8 Eh`, consistent with its
+explicit `1e-8` CD tolerance. Its projected residual is `4.5833e-7`, but the
+energy error is `1.422704e-3 Eh`, so that loose candidate remains rejected. Its
+WATER2 post-HF time is 1558.248 s: 21.149 s in direct Cholesky construction and
+1530.949 s in iterations, including 1351.401 s in doubles and 152.282 s in
+singles.
+
+Jobs 62654 and 62656 then ran one-cycle, deliberately non-converged WATER2
+profiles from source `77a1b7c`. Both Slurm jobs ended in `FAILED`: the launcher
+expected a deliberate `max_cycle=1` non-convergence to return code 5, while the
+benchmark actually returned code 1. The result JSON files and CUDA-event
+measurements are complete and useful as development observations, but the
+scheduler gate did not pass and every record has `performance_eligible=false`.
+
+Job 62654 first varied the virtual block with auxiliary block 1. Its summary
+SHA-256 is
+`39adefd0937f126ad3221713bd0189c6acce0346a3032967f7617c89cf507a57`:
+
+| ring path | virtual block | post-HF for setup + one cycle (s) | doubles equation (s) | ring component (s) |
+|---|---:|---:|---:|---:|
+| reference | 8 | 153.733 | 111.505 | 96.406 |
+| reference | 16 | 104.928 | 62.759 | 47.928 |
+| GEMM | 8 | 155.097 | 112.982 | 97.943 |
+| GEMM | 16 | 106.468 | 64.061 | 49.024 |
+| GEMM | 32 | 84.466 | 42.409 | 27.437 |
+
+Job 62656 fixed virtual block 32 and swept auxiliary block size. Its summary
+SHA-256 is
+`73c70837b7ff2dfcdf40cbcaf0b004f0b81925598e6aaa79245f377b2e380a26`:
+
+| ring path | auxiliary block | post-HF for setup + one cycle (s) | doubles equation (s) | ring component (s) | peak process HBM (MiB) |
+|---|---:|---:|---:|---:|---:|
+| reference | 1 | 84.223 | 42.152 | 27.294 | 69844 |
+| reference | 8 | 45.400 | 12.172 | 8.494 | 69846 |
+| reference | 16 | 36.616 | 5.882 | 4.109 | 69846 |
+| reference | 32 | 32.150 | 2.976 | 2.046 | 70042 |
+| GEMM | 1 | 128.414 | 72.352 | 46.740 | 69842 |
+| GEMM | 8 | 44.489 | 11.527 | 8.058 | 69844 |
+| GEMM | 16 | 36.331 | 5.783 | 3.939 | 69846 |
+| GEMM | 32 | 32.161 | 2.951 | 2.045 | 70042 |
+
+At auxiliary block 32 the reference and GEMM observations are effectively
+tied, while both are much faster than auxiliary block 1 for this single cycle.
+The cross-job GEMM auxiliary-block-1 observations also differ substantially
+(84.466 s in job 62654 versus 128.414 s in job 62656), so these data do not
+select a production kernel. No value in either table may be extrapolated to a
+converged iteration count, WATER4, WATER8, or a 10x whole-stage claim. A fresh
+immutable-source, converged run must re-check numerical gates and the 72 GiB HBM
+limit before promotion.
+
+Job 62673 performed that next WATER2 check with auxiliary and virtual blocks
+both fixed at 32, direct-CD tolerance `1e-8`, and the reference ring path. It
+completed all three converged records, wrote normal checkpoints, and passed its
+scheduler gate. The summary SHA-256 is
+`6c895c36cfc9af248b4b9e0bdfb4957a2dd00b62c4017269800731f03fe7e883`:
+
+| method | cutoff | rank / 1060 | abs. correlation error (Eh) | projected equation residual | full-space diagnostic | iterations | post-HF (s) | peak HBM (MiB) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| canonical | -- | -- | -- | -- | -- | 11 | 8.3873 | 37740 |
+| RR-CD | `1e-7` | 604 | `9.0021115e-5` | `6.23137e-7` | `1.793282e-2` | 12 | 63.0650 | 70944 |
+| RR-CD | `1e-8` | 719 | `1.2613502e-5` | `6.93585e-7` | `8.874707e-3` | 12 | 87.8201 | 70672 |
+
+Both RR-CD candidates pass the declared WATER2 correlation-energy,
+projected-equation, HBM, and host-RSS gates. The full-space residual remains an
+approximation diagnostic. Job 62673 ran on development node `compute-1-3` with
+`performance_eligible=false`, so its timing selects neither a fixed-node
+speedup nor a 10x result. These two candidates advanced to the converged
+WATER4 accuracy and iteration-speed gate; job 62674 below records its terminal
+result. The eight-monomer ghost-basis
+counterpoise validation applies later to WATER8 candidates that pass that gate.
+
+Job 62674 is the resulting direct-CD WATER4 grid from source `77a1b7c` on
+development node `compute-1-3`. Both candidate records converged and passed
+their projected-equation and resource checks, but both fail the `1e-4 Eh`
+WATER4 correlation-energy gate:
+
+| cutoff | rank / 4240 | abs. correlation error (Eh) | projected equation residual | full-space diagnostic | iterations | post-HF (s) | peak HBM (MiB) | peak RSS (GiB) |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `1e-7` | 1495 | `5.26532e-4` | `3.9254e-7` | `3.38586e-2` | 14 | 1049.779 | 61242 | 4.291 |
+| `1e-8` | 1914 | `1.1056808545e-4` | `4.4503858e-7` | `1.853977e-2` | 14 | 1366.472 | 61238 | 4.271 |
+
+For cutoff `1e-7`, post-HF contains `148.095 s` of direct Cholesky
+construction, `23.453 s` of projector construction, and `874.897 s` of
+iterations. For cutoff `1e-8`, the corresponding phases are `148.049 s`,
+`23.469 s`, and `1190.975 s`; within the 14 iterations, Wvvvv takes
+`516.225 s`, Woooo `286.632 s`, the ring component `62.812 s`, and singles
+`245.010 s`. Its separate `354.145 s` reconstructed full-space diagnostic is
+excluded from post-HF. The paired canonical observation is `35.569 s`; both RR
+records are slower. Both include their normal checkpoints. The batch ended
+`FAILED 2:0` because its deliberate summary gate counted two scientific
+failures, while the process-failure count was zero. The synchronized summary
+SHA-256 is
+`dba812b465f32f490090cb3a813e413648080535b6441d6839af69d75e913428`.
+The WATER4 stop rule therefore ends this RR candidate route, and no RR WATER8
+or eight-ghost-monomer counterpoise job will be submitted from these cutoffs.
+The failed energy gate already forces that decision, independent of any future
+exact Wvvvv kernel fusion.
+
+Job 62676 separately compared the reference and GEMM ring paths for one
+deliberately non-converged WATER4 cycle at cutoff `1e-7`, rank 1495, and
+auxiliary/virtual blocks 32. Reference versus GEMM post-HF times were
+`237.3273 s` and `237.1612 s`; their ring components were `4.4457 s` and
+`4.3338 s`. Energy, projected residual, update norm, and amplitude norms agree
+to FP64 precision. The difference is below the plan's 5% tie threshold, which
+selects the GEMM/cuBLAS path for subsequent testing. The summary SHA-256 is
+`36ab6755eca199c4907ef2448d8301fb408e41b4ac093f4a595c586c9a9abadf`.
+This is a `performance_eligible=false` component choice from one non-converged
+cycle; it cannot be extrapolated to complete iterations or WATER8.
+
+The fixed-node A2 chain did not qualify. Jobs 62612 and 62613 each ran for
+seven seconds on `compute-1-6` and ended `FAILED 2:0` with empty logs. Their
+short, silent exits are highly consistent with a snapshot-validator rejection
+before formal work began, and job 62685 directly reproduces the old
+cross-client `st_dev` defect on the same published snapshot. This attribution
+for 62612/62613 is a high-confidence inference, because their own logs contain
+no direct error text. Jobs 62614 and 62615 then remained pending with
+`DependencyNeverSatisfied`; both were explicitly cancelled and superseded at
+`2026-09-14T12:27:01` MTU time. The local supersession record has SHA-256
+`a643bbf0f3e343a5dec0c9594c84bca8db092889637080767170cd557fc52a1b`.
+None of these jobs supplies fixed-node qualification or performance evidence.
 
 Formal timings should run from an immutable deployment made by
 `deploy_mtu_snapshot.sh`. It first copies the repository into a private local
@@ -442,6 +670,18 @@ was allocated by that run. After a complete callback receipt, it may also remove
 the same inode through the published digest name if later receipt validation
 fails. If an ancestor identity changed, cleanup refuses mutation and prints the
 retained inode for operator recovery.
+
+Jobs 62678 and 62684 (`rrccsd-gpu-tests-dev`) and diagnostic job 62685 were
+rejected on `compute-1-4` before scientific testing because the older validator
+required cross-client `st_dev` equality. The publication host attested device
+48 and inode 83972272889; `compute-1-4` observed device 53 and the same inode.
+Commit `6fe3e9e` keeps the inode as the strict shared-tree binding while treating
+the mount-device number as cross-client diagnostic metadata. Validation job
+62688 then completed on `compute-1-4` with exit code 0 against the older
+published snapshot: `valid=true`, `reasons=[]`, `device_match=false`, and
+`inode_match=true`. This verifies the portable validation rule; it is
+infrastructure evidence and supplies no CCSD numerical or performance result.
+
 A mutable development overlay is suitable only for correctness and profiling
 runs.
 
