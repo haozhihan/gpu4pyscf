@@ -211,9 +211,17 @@ def test_algorithm7_x_blocking_does_not_change_any_output():
         "combined",
     ):
         expected = getattr(single, name)
-        np.testing.assert_array_equal(getattr(paired, name), expected)
-        np.testing.assert_array_equal(getattr(full, name), expected)
-        np.testing.assert_array_equal(getattr(oversized, name), expected)
+        # BLAS is free to accumulate different block shapes in a different
+        # order, so compare at a tight FP64 roundoff tolerance.
+        np.testing.assert_allclose(
+            getattr(paired, name), expected, atol=5e-13, rtol=5e-14
+        )
+        np.testing.assert_allclose(
+            getattr(full, name), expected, atol=5e-13, rtol=5e-14
+        )
+        np.testing.assert_allclose(
+            getattr(oversized, name), expected, atol=5e-13, rtol=5e-14
+        )
 
 
 def test_algorithm7_metadata_is_explicitly_audit_only():

@@ -622,8 +622,8 @@ def test_cupy_paths_match_numpy_and_record_only_control_scalar_reads():
         np.testing.assert_allclose(cp.asnumpy(actual), expected, atol=3e-10)
     report = transfers.to_dict()
     assert report["total_transfers"] == 7
-    assert report["d2h_bytes"] == 7
-    assert report["h2d_bytes"] == 0
+    assert report["by_kind"]["d2h"] == {"bytes": 7, "count": 7}
+    assert "h2d" not in report["by_kind"]
 
 
 def test_device_mismatch_fails_closed_with_two_gpus():

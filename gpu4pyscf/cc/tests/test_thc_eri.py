@@ -147,9 +147,11 @@ def test_algorithm6_x_blocking_does_not_change_contraction():
     paired = thc_omega_ac_algorithm6(*args, x_block_size=2)
     full = thc_omega_ac_algorithm6(*args, x_block_size=3)
     oversized = thc_omega_ac_algorithm6(*args, x_block_size=7)
-    np.testing.assert_array_equal(paired, single)
-    np.testing.assert_array_equal(full, single)
-    np.testing.assert_array_equal(oversized, single)
+    # Different block shapes can change the BLAS reduction order.  Require
+    # FP64 agreement near roundoff rather than bitwise identity.
+    np.testing.assert_allclose(paired, single, atol=5e-13, rtol=5e-14)
+    np.testing.assert_allclose(full, single, atol=5e-13, rtol=5e-14)
+    np.testing.assert_allclose(oversized, single, atol=5e-13, rtol=5e-14)
 
 
 def test_metadata_is_explicitly_audit_only_and_production_disabled():
