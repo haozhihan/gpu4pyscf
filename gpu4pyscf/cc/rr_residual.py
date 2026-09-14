@@ -1635,6 +1635,177 @@ def _rr_t2_virtual_block(
     )
 
 
+def _select_projected_ring_matrix_chain(
+    nocc: int,
+    nvir: int,
+    wa: int,
+    wb: int,
+    rank: int,
+    itemsize: int,
+) -> dict[str, Any]:
+    """Choose the ordinary crossed-ring matrix chain from actual tile sizes.
+
+    With ``m=nocc*wa``, ``k=nocc*nvir``, ``n=nocc*wb`` and ``r=rank``, the
+    contraction is ``L.T @ W @ T @ R``.  The residual-first candidate keeps
+    the historical association ``((L.T @ (W @ T)) @ R)``.  The alternative
+    projects the right side first as ``L.T @ (W @ (T @ R))``.
+
+    A right-first chain is admitted only when it has strictly fewer scalar
+    multiplies and does not exceed the residual-first logical temporary peak.
+    The latter is the local resource contract: a selector optimization may
+    not consume more HBM workspace than the already admitted fallback.
+    """
+
+    dimensions = tuple(int(value) for value in (
+        nocc,
+        nvir,
+        wa,
+        wb,
+        rank,
+        itemsize,
+    ))
+    if any(value < 1 for value in dimensions):
+        raise ValueError("ring matrix-chain dimensions must be positive")
+    nocc, nvir, wa, wb, rank, itemsize = dimensions
+    m = nocc * wa
+    k = nocc * nvir
+    n = nocc * wb
+    r = rank
+
+    residual_multiply_count = (
+        m * k * n
+        + r * m * n
+        + r * n * r
+    )
+    right_multiply_count = (
+        k * n * r
+        + m * k * r
+        + r * m * r
+    )
+    # Returned r x r output and input transpose/reshape copies are common to
+    # both candidates.  The residual path may hold the GEMM output and its
+    # reordered copy together; the right-first path may hold projected_t and
+    # both layouts of projected_w during the pair-ordering copy.
+    residual_temporary_nbytes = (2 * m * n + r * n) * itemsize
+    right_temporary_nbytes = (k * r + 2 * m * r) * itemsize
+    right_compute_better = right_multiply_count < residual_multiply_count
+    right_within_resource_contract = (
+        right_temporary_nbytes <= residual_temporary_nbytes
+    )
+    use_right_first = (
+        right_compute_better and right_within_resource_contract
+    )
+    selected_order = (
+        "right-project-first" if use_right_first else "residual-first"
+    )
+    if use_right_first:
+        selection_reason = (
+            "right-project-first-has-fewer-multiplies-and-does-not-"
+            "increase-logical-peak-temporary"
+        )
+    elif not right_compute_better:
+        selection_reason = "residual-first-has-fewer-or-equal-multiplies"
+    else:
+        selection_reason = (
+            "residual-first-enforces-logical-peak-temporary-contract"
+        )
+
+    return {
+        "schema": "gpu4pyscf.rr-ring-matrix-chain.v1",
+        "dimensions": {"m": m, "k": k, "n": n, "r": r},
+        "selected_order": selected_order,
+        "selection_reason": selection_reason,
+        "resource_contract": {
+            "policy": "right-first-must-not-exceed-residual-first-peak",
+            "temporary_budget_nbytes": int(residual_temporary_nbytes),
+            "right_project_first_within_budget": bool(
+                right_within_resource_contract
+            ),
+        },
+        "candidates": {
+            "residual_first": {
+                "order": [
+                    "wmat@tmat",
+                    "left_u.T@residual",
+                    "projected_left@right_u",
+                ],
+                "scalar_multiply_count": int(residual_multiply_count),
+                "estimated_gemm_flops": int(2 * residual_multiply_count),
+                "logical_peak_temporary_nbytes": int(
+                    residual_temporary_nbytes
+                ),
+                "materialized_ijab": True,
+            },
+            "right_project_first": {
+                "order": [
+                    "tmat@right_u",
+                    "wmat@projected_t",
+                    "left_u.T@projected_w",
+                ],
+                "scalar_multiply_count": int(right_multiply_count),
+                "estimated_gemm_flops": int(2 * right_multiply_count),
+                "logical_peak_temporary_nbytes": int(
+                    right_temporary_nbytes
+                ),
+                "materialized_ijab": False,
+            },
+        },
+    }
+
+
+def _projected_ring_candidate_temporaries(
+    nocc: int,
+    nvir: int,
+    wa: int,
+    wb: int,
+    rank: int,
+    itemsize: int,
+    selected_order: str,
+) -> dict[str, int]:
+    """Candidate-specific logical arrays for one ordinary ring tile.
+
+    Input layout copies, projector views, and the common returned core are
+    accounted once in the estimator's separate common-workspace ledger.
+    """
+
+    nocc, nvir, wa, wb, rank, itemsize = (
+        int(value)
+        for value in (nocc, nvir, wa, wb, rank, itemsize)
+    )
+    if any(
+        value < 1
+        for value in (nocc, nvir, wa, wb, rank, itemsize)
+    ):
+        raise ValueError("ring temporary dimensions must be positive")
+    if selected_order not in {"residual-first", "right-project-first"}:
+        raise ValueError("unknown ordinary ring matrix-chain order")
+
+    m = nocc * wa
+    k = nocc * nvir
+    n = nocc * wb
+    r = rank
+    temporaries: dict[str, int] = {}
+    if selected_order == "residual-first":
+        residual_nbytes = m * n * itemsize
+        temporaries.update({
+            "ijab_residual_nbytes": int(residual_nbytes),
+            "ijab_transpose_reshape_copy_nbytes": int(residual_nbytes),
+            "projected_left_nbytes": int(r * n * itemsize),
+        })
+    else:
+        projected_w_nbytes = m * r * itemsize
+        temporaries.update({
+            "ijab_residual_nbytes": 0,
+            "ijab_transpose_reshape_copy_nbytes": 0,
+            "projected_t_nbytes": int(k * r * itemsize),
+            "projected_w_nbytes": int(projected_w_nbytes),
+            "projected_w_pair_order_copy_nbytes": int(
+                projected_w_nbytes
+            ),
+        })
+    return temporaries
+
+
 def estimate_rr_ring_workspace_nbytes(
     nocc: int,
     nvir: int,
@@ -1648,10 +1819,14 @@ def estimate_rr_ring_workspace_nbytes(
 
     The largest auxiliary-dependent crossed intermediate in the Wvoov/Wvovo
     builders has shape ``(A,k,i,l,a)``.  The estimate deliberately uses the
-    requested auxiliary block, never the full ``naux``.  The GEMM helper may
-    allocate copies when ``transpose(...).reshape(...)`` receives a
-    non-contiguous view, so the returned simultaneous-live bound includes one
-    copy-sized allowance for each such operand and for the projected tile.
+    requested auxiliary block, never the full ``naux``.  The ordinary crossed
+    GEMM chain is selected from residual-first and right-project-first for
+    every actual full/tail ``(wa,wb)`` shape.  Its peak ledger comes from the
+    largest selected candidate rather than assuming that the maximum square
+    tile selects the same association as every tail.  The fourth Wvovo
+    contraction always retains one bounded ``ijab`` tile and is modeled
+    separately.
+    Transpose/reshape copies receive conservative copy-sized allowances.
     These are logical shape bounds, not runtime allocation or HBM claims.
     """
 
@@ -1672,9 +1847,81 @@ def estimate_rr_ring_workspace_nbytes(
     ijab_tile = nocc * nocc * vtile * vtile * itemsize
     projector_tile = nocc * vtile * rank * itemsize
     projected_w_tile = vtile * nocc * rank * itemsize
+    projected_t = nocc * nvir * rank * itemsize
     rank2 = rank * rank * itemsize
     chain_rank2 = 3 * rank2
     chain_rank_rect = rank * nocc * vtile * itemsize
+    ordinary_chain_selection = _select_projected_ring_matrix_chain(
+        nocc, nvir, vtile, vtile, rank, itemsize
+    )
+    tail_width = nvir % vblock
+    tile_width_set = {vtile}
+    if tail_width:
+        tile_width_set.add(tail_width)
+    tile_widths = sorted(tile_width_set)
+    ordinary_tile_selections = [
+        {
+            "left_virtual_width": int(left_width),
+            "right_virtual_width": int(right_width),
+            **_select_projected_ring_matrix_chain(
+                nocc,
+                nvir,
+                left_width,
+                right_width,
+                rank,
+                itemsize,
+            ),
+        }
+        for left_width in tile_widths
+        for right_width in tile_widths
+    ]
+    for selection in ordinary_tile_selections:
+        selected_temporaries = _projected_ring_candidate_temporaries(
+            nocc,
+            nvir,
+            int(selection["left_virtual_width"]),
+            int(selection["right_virtual_width"]),
+            rank,
+            itemsize,
+            str(selection["selected_order"]),
+        )
+        selection["selected_candidate_temporaries"] = selected_temporaries
+        selection["selected_candidate_temporary_sum_nbytes"] = int(
+            sum(selected_temporaries.values())
+        )
+    ordinary_peak_tile = max(
+        ordinary_tile_selections,
+        key=lambda selection: (
+            int(selection["selected_candidate_temporary_sum_nbytes"]),
+            int(
+                selection["candidates"][
+                    str(selection["selected_order"]).replace("-", "_")
+                ]["logical_peak_temporary_nbytes"]
+            ),
+            int(selection["left_virtual_width"]),
+            int(selection["right_virtual_width"]),
+        ),
+    )
+    ordinary_selected_orders = sorted({
+        str(selection["selected_order"])
+        for selection in ordinary_tile_selections
+    })
+    ordinary_residual_tiles = [
+        selection
+        for selection in ordinary_tile_selections
+        if selection["selected_order"] == "residual-first"
+    ]
+    ordinary_ijab_tile = max(
+        (
+            nocc
+            * nocc
+            * int(selection["left_virtual_width"])
+            * int(selection["right_virtual_width"])
+            * itemsize
+            for selection in ordinary_residual_tiles
+        ),
+        default=0,
+    )
 
     persistent = {
         "core_nbytes": int(rank2),
@@ -1704,25 +1951,69 @@ def estimate_rr_ring_workspace_nbytes(
         "left_wvovo_nbytes": int(rank2),
         "direct_chain_matmul_temporary_nbytes": int(chain_rank2),
     }
-    crossed_temporaries = {
+    crossed_common_temporaries = {
+        "wmat_transpose_copy_nbytes": int(w_tile),
+        "tmat_transpose_copy_nbytes": int(t2_tile),
+        "left_projector_copy_nbytes": int(projector_tile),
+        "right_projector_copy_nbytes": int(projector_tile),
+        "projected_return_nbytes": int(rank2),
+    }
+    crossed_residual_first_temporaries = (
+        _projected_ring_candidate_temporaries(
+            nocc,
+            nvir,
+            vtile,
+            vtile,
+            rank,
+            itemsize,
+            "residual-first",
+        )
+    )
+    crossed_right_project_first_temporaries = (
+        _projected_ring_candidate_temporaries(
+            nocc,
+            nvir,
+            vtile,
+            vtile,
+            rank,
+            itemsize,
+            "right-project-first",
+        )
+    )
+    selected_candidate_key = (
+        "right_project_first"
+        if ordinary_chain_selection["selected_order"]
+        == "right-project-first"
+        else "residual_first"
+    )
+    crossed_temporaries = dict(
+        ordinary_peak_tile["selected_candidate_temporaries"]
+    )
+    crossed_wvovo_temporaries = {
         "wmat_transpose_copy_nbytes": int(w_tile),
         "tmat_transpose_copy_nbytes": int(t2_tile),
         "ijab_residual_nbytes": int(ijab_tile),
         "ijab_transpose_reshape_copy_nbytes": int(ijab_tile),
         "left_projector_copy_nbytes": int(projector_tile),
         "right_projector_copy_nbytes": int(projector_tile),
-        "chain_matmul_temporary_nbytes": int(chain_rank_rect),
+        "projected_residual_nbytes": int(chain_rank_rect),
         "projected_return_nbytes": int(rank2),
     }
     w_builder_sum = sum(w_builder_temporaries.values())
     direct_sum = sum(direct_temporaries.values())
-    crossed_sum = sum(crossed_temporaries.values())
-    temporary_sum = w_builder_sum + direct_sum + crossed_sum
+    crossed_chain_sum = sum(crossed_temporaries.values())
+    crossed_common_sum = sum(crossed_common_temporaries.values())
+    crossed_sum = crossed_common_sum + crossed_chain_sum
+    crossed_wvovo_sum = sum(crossed_wvovo_temporaries.values())
+    crossed_peak_sum = max(crossed_sum, crossed_wvovo_sum)
+    temporary_sum = w_builder_sum + direct_sum + crossed_peak_sum
     all_arrays = [
         *persistent.values(),
         *w_builder_temporaries.values(),
         *direct_temporaries.values(),
+        *crossed_common_temporaries.values(),
         *crossed_temporaries.values(),
+        *crossed_wvovo_temporaries.values(),
     ]
     return {
         # Flat aliases keep the key useful for lightweight planning clients.
@@ -1730,17 +2021,71 @@ def estimate_rr_ring_workspace_nbytes(
         "w_tile_nbytes": int(w_tile),
         "t2_tile_nbytes": int(t2_tile),
         "ijab_tile_nbytes": int(ijab_tile),
+        "ordinary_crossed_ijab_tile_nbytes": int(ordinary_ijab_tile),
+        "ordinary_crossed_full_tile_ijab_tile_nbytes": int(
+            0
+            if selected_candidate_key == "right_project_first"
+            else ijab_tile
+        ),
+        "wvovo_crossed_ijab_tile_nbytes": int(ijab_tile),
         "projector_tile_nbytes": int(projector_tile),
         "projected_w_tile_nbytes": int(projected_w_tile),
+        "projected_t_nbytes": int(projected_t),
         "pair_metric_nbytes": int(rank2),
+        "ordinary_crossed_materialized_ijab": bool(
+            ordinary_residual_tiles
+        ),
+        "ordinary_crossed_full_tile_materialized_ijab": bool(
+            selected_candidate_key == "residual_first"
+        ),
+        "wvovo_crossed_materialized_ijab": True,
+        "ordinary_crossed_contraction_order": list(
+            ordinary_chain_selection["candidates"][
+                selected_candidate_key
+            ]["order"]
+        ),
+        "ordinary_crossed_contraction_order_scope": (
+            "maximum-square-virtual-tile"
+        ),
+        "ordinary_crossed_selected_orders": ordinary_selected_orders,
+        "ordinary_crossed_chain_selection": ordinary_chain_selection,
+        "ordinary_crossed_chain_selections_by_tile_shape": (
+            ordinary_tile_selections
+        ),
+        "ordinary_crossed_peak_tile": dict(ordinary_peak_tile),
+        "ordinary_crossed_peak_candidate": str(
+            ordinary_peak_tile["selected_order"]
+        ),
+        "ordinary_crossed_peak_chain_temporary_nbytes": int(
+            crossed_chain_sum
+        ),
+        "ordinary_crossed_common_temporary_nbytes": int(
+            crossed_common_sum
+        ),
+        "ordinary_crossed_peak_sum_nbytes": int(crossed_sum),
+        "ordinary_crossed_candidate_temporaries": {
+            "residual_first": crossed_residual_first_temporaries,
+            "right_project_first": (
+                crossed_right_project_first_temporaries
+            ),
+        },
+        "ordinary_crossed_candidate_temporaries_scope": (
+            "maximum-square-virtual-tile-candidate-reference"
+        ),
+        "ordinary_crossed_peak_tile_scope": (
+            "maximum-over-all-full-and-tail-runtime-tile-shapes"
+        ),
         "largest_logical_array_nbytes": int(max(all_arrays)),
         "persistent": persistent,
         "persistent_sum_nbytes": int(persistent_sum),
         "temporaries": {
             "w_builder": w_builder_temporaries,
             "direct_gemm": direct_temporaries,
+            "crossed_gemm_common": crossed_common_temporaries,
             "crossed_gemm": crossed_temporaries,
+            "crossed_wvovo_gemm": crossed_wvovo_temporaries,
         },
+        "crossed_gemm_peak_sum_nbytes": int(crossed_peak_sum),
         "temporary_sum_nbytes": int(temporary_sum),
         "simultaneously_live_shape_upper_bound_nbytes": int(
             persistent_sum + temporary_sum
@@ -1995,17 +2340,22 @@ def _projected_ring_gemm_tile(
     *,
     right_is_wvovo: bool = False,
 ):
-    """Project one ring contraction with two matrix multiplications.
+    """Project one ring contraction through an explicitly ordered GEMM chain.
 
-    ``right_t2`` is a virtual tile only.  The GEMM contractions allocate one
-    bounded ``(i,a,j,b)`` residual tile.  It becomes a complete ``ijab``
-    residual only when ``virtual_block_size >= nvir``; it is never a full
-    dense ``T2`` or four-index ERI.  ``right_is_wvovo`` is used for the fourth
-    ring term, whose free virtual index lives on the intermediate rather than
-    on the left projector tile.
+    ``right_t2`` is a virtual tile only.  The ordinary crossed-ring branch
+    selects between the historical bounded ``(i,a,j,b)`` residual and the
+    ``T @ U_right`` direct projection using its actual matrix dimensions.
+    ``right_is_wvovo`` selects the fourth ring term, whose free virtual index
+    lives on the intermediate; that branch retains its original bounded
+    residual formula and projects it with an explicit right association.
+
+    The two integer diagnostics are, respectively, the materialized residual
+    tile size and the largest logical intermediate observed by this helper;
+    the final mapping records the selected association and both candidates.
     """
 
     no, wa, rank = left_u.shape
+    left_projector = left_u.reshape(no * wa, rank)
     if right_is_wvovo:
         # W[b,k,c,i] T[k,j,a,c] -> R[i,a,j,b]
         wb = left_intermediate.shape[0]
@@ -2018,12 +2368,23 @@ def _projected_ring_gemm_tile(
         residual = (wmat @ tmat).reshape(wb, no, no, wa)
         residual = residual.transpose(1, 3, 2, 0)
         residual_matrix = residual.reshape(no * wa, -1)
-        projected = left_u.reshape(no * wa, rank).T @ residual_matrix @ right_u.reshape(
-            -1, rank
+        right_projector = right_u.reshape(-1, rank)
+        projected_residual = residual_matrix @ right_projector
+        projected = left_projector.T @ projected_residual
+        largest = max(
+            int(wmat.nbytes),
+            int(tmat.nbytes),
+            int(residual.nbytes),
+            int(projected_residual.nbytes),
+            int(projected.nbytes),
         )
-        return projected, int(residual.nbytes)
+        return projected, int(residual.nbytes), largest, {
+            "schema": "gpu4pyscf.rr-ring-fixed-wvovo-chain.v1",
+            "selected_order": "residual-first-right-project",
+            "materialized_ijab": True,
+        }
 
-    # W[a,k,i,c] T[k,j,c,b] -> R[i,a,j,b]
+    # W[a,k,i,c] T[k,j,b,c] -> R[i,a,j,b], projected without R.
     wb = right_u.shape[1]
     wmat = left_intermediate.transpose(0, 2, 1, 3).reshape(
         wa * no, -1
@@ -2031,13 +2392,45 @@ def _projected_ring_gemm_tile(
     tmat = right_t2.transpose(0, 3, 1, 2).reshape(
         -1, no * wb
     )
-    residual = (wmat @ tmat).reshape(wa, no, no, wb)
-    residual = residual.transpose(1, 0, 2, 3)
-    residual_matrix = residual.reshape(no * wa, no * wb)
-    projected = left_u.reshape(no * wa, rank).T @ residual_matrix @ right_u.reshape(
-        no * wb, rank
+    right_projector = right_u.reshape(no * wb, rank)
+    nvir = int(left_intermediate.shape[3])
+    selection = _select_projected_ring_matrix_chain(
+        no,
+        nvir,
+        wa,
+        wb,
+        rank,
+        np.dtype(left_intermediate.dtype).itemsize,
     )
-    return projected, int(residual.nbytes)
+    if selection["selected_order"] == "residual-first":
+        residual = (wmat @ tmat).reshape(wa, no, no, wb)
+        residual = residual.transpose(1, 0, 2, 3)
+        residual_matrix = residual.reshape(no * wa, no * wb)
+        projected_left = left_projector.T @ residual_matrix
+        projected = projected_left @ right_projector
+        largest = max(
+            int(wmat.nbytes),
+            int(tmat.nbytes),
+            int(residual.nbytes),
+            int(projected_left.nbytes),
+            int(projected.nbytes),
+        )
+        return projected, int(residual.nbytes), largest, selection
+
+    projected_t = tmat @ right_projector
+    projected_w = (wmat @ projected_t).reshape(wa, no, rank)
+    projected_w = projected_w.transpose(1, 0, 2).reshape(
+        no * wa, rank
+    )
+    projected = left_projector.T @ projected_w
+    largest = max(
+        int(wmat.nbytes),
+        int(tmat.nbytes),
+        int(projected_t.nbytes),
+        int(projected_w.nbytes),
+        int(projected.nbytes),
+    )
+    return projected, 0, largest, selection
 
 
 def projected_cc_ring_gemm(
@@ -2054,12 +2447,16 @@ def projected_cc_ring_gemm(
 
     The existing :func:`projected_cc_ring` remains the equation-level oracle.
     The two direct contractions are evaluated through RR factorized GEMMs.
-    The crossed contractions use bounded virtual ``T2`` tiles, but each tile
-    is at most ``(nocc,nocc,nvir,virtual_block)``.  The GEMM helper allocates a
-    corresponding ``ijab`` residual tile; choosing ``virtual_block_size >=
-    nvir`` intentionally degenerates to the complete residual tile.  A full
-    dense ``T2`` or four-index ERI is never formed.  ``auxiliary`` and
-    ``virtual`` block sizes bound the logical shapes independently.
+    The crossed contractions use bounded virtual ``T2`` tiles, each at most
+    ``(nocc,nocc,nvir,virtual_block)``.  For every ordinary crossed tile, a
+    matrix-chain selector compares residual-first with right-project-first
+    FLOPs and logical temporary bytes.  Right-project-first is used only when
+    it reduces FLOPs without spending more temporary memory.  The fourth
+    ``Wvovo`` term retains a bounded residual tile; choosing
+    ``virtual_block_size >= nvir`` makes that one tile span both virtual
+    dimensions.  A full dense ``T2`` or four-index ERI is never formed.
+    ``auxiliary`` and ``virtual`` block sizes bound the logical shapes
+    independently.
     """
 
     vectors = doubles.projector.vectors
@@ -2101,6 +2498,10 @@ def projected_cc_ring_gemm(
         itemsize=np.dtype(dtype).itemsize,
         rank=rank,
     )
+    ordinary_order_counts: dict[str, int] = {}
+    ordinary_shape_counts: dict[tuple[int, int], int] = {}
+    ordinary_shape_selections: dict[tuple[int, int], dict[str, Any]] = {}
+    ordinary_tile_residual_nbytes = 0
 
     # The direct Wvoov/Wvovo terms can be fully factorized.  This removes the
     # repeated T2 slice reconstruction from the dominant part of the ring.
@@ -2152,16 +2553,34 @@ def projected_cc_ring_gemm(
             b_slice = slice(b_start, min(b_start + vblock, nvir))
             ub = u[:, b_slice]
             t2_bc = _rr_t2_virtual_block(doubles, b_slice, slice(0, nvir))
-            crossed, crossed_nbytes = _projected_ring_gemm_tile(
+            (
+                crossed,
+                crossed_nbytes,
+                crossed_largest,
+                chain_selection,
+            ) = _projected_ring_gemm_tile(
                 wvoov, t2_bc, ua, ub
             )
+            selected_order = str(chain_selection["selected_order"])
+            shape_key = (wa, int(b_slice.stop - b_slice.start))
+            ordinary_order_counts[selected_order] = (
+                ordinary_order_counts.get(selected_order, 0) + 1
+            )
+            ordinary_shape_counts[shape_key] = (
+                ordinary_shape_counts.get(shape_key, 0) + 1
+            )
+            ordinary_shape_selections.setdefault(shape_key, chain_selection)
             half -= crossed
+            ordinary_tile_residual_nbytes = max(
+                ordinary_tile_residual_nbytes, crossed_nbytes
+            )
             tile_residual_nbytes = max(tile_residual_nbytes, crossed_nbytes)
             largest = max(
                 largest,
                 int(t2_bc.nbytes),
                 int(crossed.nbytes),
                 crossed_nbytes,
+                crossed_largest,
             )
 
     # The final Wvovo[b,k,c,i] * T2[k,j,a,c] term is evaluated in a second
@@ -2179,7 +2598,12 @@ def projected_cc_ring_gemm(
             t2_ac = _rr_t2_virtual_block(
                 doubles, a_slice, slice(0, nvir)
             )
-            crossed, crossed_nbytes = _projected_ring_gemm_tile(
+            (
+                crossed,
+                crossed_nbytes,
+                crossed_largest,
+                _fixed_selection,
+            ) = _projected_ring_gemm_tile(
                 wvovo_b,
                 t2_ac,
                 ua,
@@ -2193,9 +2617,36 @@ def projected_cc_ring_gemm(
                 int(t2_ac.nbytes),
                 int(crossed.nbytes),
                 crossed_nbytes,
+                crossed_largest,
                 block_largest,
             )
 
+    workspace_shape_upper_bound[
+        "ordinary_crossed_runtime_selected_order_counts"
+    ] = {
+        key: int(ordinary_order_counts[key])
+        for key in sorted(ordinary_order_counts)
+    }
+    workspace_shape_upper_bound["ordinary_crossed_selected_orders"] = sorted(
+        ordinary_order_counts
+    )
+    workspace_shape_upper_bound["ordinary_crossed_materialized_ijab"] = bool(
+        ordinary_order_counts.get("residual-first", 0)
+    )
+    workspace_shape_upper_bound["ordinary_crossed_ijab_tile_nbytes"] = int(
+        ordinary_tile_residual_nbytes
+    )
+    workspace_shape_upper_bound[
+        "ordinary_crossed_runtime_tile_selections"
+    ] = [
+        {
+            "left_virtual_width": int(shape_key[0]),
+            "right_virtual_width": int(shape_key[1]),
+            "application_count": int(ordinary_shape_counts[shape_key]),
+            **ordinary_shape_selections[shape_key],
+        }
+        for shape_key in sorted(ordinary_shape_selections)
+    ]
     projected = half + half.T
     return RRResidualTermResult(
         core=projected,
