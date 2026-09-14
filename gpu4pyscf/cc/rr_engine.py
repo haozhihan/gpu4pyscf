@@ -26,8 +26,9 @@ performance ineligible until the A100 gates pass.
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 import numpy as np
 
@@ -57,6 +58,115 @@ def _array_module(array: Any):
 def _same_backend(reference: Any, *values: Any) -> bool:
     xp = _array_module(reference)
     return all(_array_module(value) is xp for value in values)
+
+
+class _RRDoublesPhaseTiming:
+    """Record coarse RR doubles phases without per-term GPU barriers.
+
+    NumPy phases use nested host wall timers immediately.  CuPy-compatible
+    backends enqueue event pairs on one current stream, then
+    :meth:`synchronize_and_record` drains that stream exactly once at the end
+    of ``jacobi``.  Device durations remain a separate timing domain instead
+    of being subtracted from already-closed host-enqueue parent phases.
+    """
+
+    def __init__(self, array_module: Any, metrics: RunMetrics) -> None:
+        self._xp = array_module
+        self._metrics = metrics
+        self._device = array_module is not np
+        self._stream = None
+        self._pending: list[
+            tuple[str, Any, Any, dict[str, Any], int]
+        ] = []
+
+    @property
+    def pending_count(self) -> int:
+        return len(self._pending)
+
+    def metadata(self) -> dict[str, Any]:
+        coverage = {
+            "coverage": "component-build-only",
+            "excluded_operations": [
+                "core_assembly",
+                "projected_denominator_solve",
+            ],
+            "term_sum_is_complete_doubles_time": False,
+        }
+        if self._device:
+            return {
+                "timing_semantics": "cuda-event-device-elapsed",
+                "synchronization": "jacobi-current-stream-once",
+                "separate_device_timing_domain": True,
+                "accounted_as_child": False,
+                **coverage,
+            }
+        return {
+            "timing_semantics": "host-wall",
+            "synchronization": "none-cpu-synchronous",
+            "separate_device_timing_domain": False,
+            "accounted_as_child": True,
+            **coverage,
+        }
+
+    @contextlib.contextmanager
+    def phase(self, name: str, metadata: Mapping[str, Any]):
+        fields = dict(metadata)
+        fields.update(self.metadata())
+        if not self._device:
+            with self._metrics.phase(name, metadata=fields):
+                yield
+            return
+
+        if self._stream is None:
+            self._stream = self._xp.cuda.get_current_stream()
+        start = self._xp.cuda.Event()
+        stop = self._xp.cuda.Event()
+        depth = len(getattr(self._metrics, "_stack", ()))
+        start.record(self._stream)
+        try:
+            yield
+        finally:
+            stop.record(self._stream)
+            self._pending.append((str(name), start, stop, fields, depth))
+
+    def discard(self) -> None:
+        """Drop unresolved event references after a failed Jacobi build."""
+
+        self._pending.clear()
+        self._stream = None
+
+    def synchronize_and_record(self) -> None:
+        """Synchronize once, then convert every completed event pair."""
+
+        if not self._pending:
+            return
+        pending = self._pending
+        stream = self._stream
+        self._pending = []
+        self._stream = None
+        stream.synchronize()
+        completed = [
+            (
+                name,
+                float(self._xp.cuda.get_elapsed_time(start, stop)) * 1e-3,
+                metadata,
+                depth,
+            )
+            for name, start, stop, metadata, depth in pending
+        ]
+        phase_offset = len(self._metrics.phases)
+        try:
+            for name, elapsed_s, metadata, depth in completed:
+                self._metrics.record_device_phase(
+                    name,
+                    elapsed_s,
+                    metadata=metadata,
+                    account_as_child=False,
+                    depth=depth,
+                )
+        except BaseException:
+            del self._metrics.phases[phase_offset:]
+            raise
 
 
 @dataclass(frozen=True)
@@ -156,6 +266,15 @@ class RRCCSDIterationEngine:
             nvir,
             transfer_counter=self.metrics.transfers,
         )
+        profile_metadata = _RRDoublesPhaseTiming(
+            self.xp, self.metrics
+        ).metadata()
+        profile_metadata.update({
+            "ring_kernel": self.rr_ring_kernel,
+            "auxiliary_block_size": self.auxiliary_block_size,
+            "virtual_block_size": self.virtual_block_size,
+        })
+        self.metrics.metadata["rr_doubles_term_profiling"] = profile_metadata
 
     def _read_scalar(self, value: Any) -> float:
         if self.xp is not np:
@@ -191,57 +310,73 @@ class RRCCSDIterationEngine:
                     auxiliary_block_size=self.auxiliary_block_size,
                 )
                 new_t1 = singles.amplitudes(self.eia)
-        with nvtx_range("rr/full-doubles-equation"):
-            with self.metrics.phase("rr_doubles_equation"):
-                doubles_equation = build_projected_ccsd_doubles_numerator(
-                    doubles,
-                    t1,
-                    self.fock_oo,
-                    self.fock_ov,
-                    self.fock_vv,
-                    self.occupied_energies,
-                    self.virtual_energies,
-                    self.integrals.L_oo,
-                    self.integrals.L_ov,
-                    self.integrals.L_vv,
-                    level_shift=self.level_shift,
-                    auxiliary_block_size=self.auxiliary_block_size,
-                    virtual_block_size=self.virtual_block_size,
-                    ring_kernel=self.rr_ring_kernel,
-                    transfer_counter=self.metrics.transfers,
-                )
-                new_core = doubles_equation.solve(
-                    self.denominator,
-                    transfer_counter=self.metrics.transfers,
-                )
-        new_doubles = RRDoubles(
-            projector=self.projector,
-            core=new_core,
-            nocc=self.nocc,
-            nvir=self.nvir,
-        )
-        error_t1 = new_t1 - t1
-        error_core = new_core - doubles.core
-        update_norm = self.xp.sqrt(
-            self.xp.vdot(error_t1, error_t1).real
-            + self.xp.vdot(error_core, error_core).real
-        )
-        equation_residual_t1 = singles.numerator - self.eia * t1
-        equation_residual_core = doubles_equation.core - (
-            self.denominator.matrix @ doubles.core
-            + doubles.core @ self.denominator.matrix
-        )
-        residual_norm = self.xp.sqrt(
-            self.xp.vdot(equation_residual_t1, equation_residual_t1).real
-            + self.xp.vdot(equation_residual_core, equation_residual_core).real
-        )
-        energy = rr_ccsd_energy(
-            doubles,
-            t1,
-            self.fock_ov,
-            self.integrals.L_ov,
-            auxiliary_block_size=self.auxiliary_block_size,
-        ).value
+        doubles_timing = _RRDoublesPhaseTiming(self.xp, self.metrics)
+        try:
+            with nvtx_range("rr/full-doubles-equation"):
+                with self.metrics.phase(
+                    "rr_doubles_equation",
+                    timing_semantics=(
+                        "host-wall" if self.xp is np else "host-enqueue"
+                    ),
+                ):
+                    doubles_equation = build_projected_ccsd_doubles_numerator(
+                        doubles,
+                        t1,
+                        self.fock_oo,
+                        self.fock_ov,
+                        self.fock_vv,
+                        self.occupied_energies,
+                        self.virtual_energies,
+                        self.integrals.L_oo,
+                        self.integrals.L_ov,
+                        self.integrals.L_vv,
+                        level_shift=self.level_shift,
+                        auxiliary_block_size=self.auxiliary_block_size,
+                        virtual_block_size=self.virtual_block_size,
+                        ring_kernel=self.rr_ring_kernel,
+                        transfer_counter=self.metrics.transfers,
+                        profile_phase=doubles_timing.phase,
+                    )
+                    new_core = doubles_equation.solve(
+                        self.denominator,
+                        transfer_counter=self.metrics.transfers,
+                    )
+            new_doubles = RRDoubles(
+                projector=self.projector,
+                core=new_core,
+                nocc=self.nocc,
+                nvir=self.nvir,
+            )
+            error_t1 = new_t1 - t1
+            error_core = new_core - doubles.core
+            update_norm = self.xp.sqrt(
+                self.xp.vdot(error_t1, error_t1).real
+                + self.xp.vdot(error_core, error_core).real
+            )
+            equation_residual_t1 = singles.numerator - self.eia * t1
+            equation_residual_core = doubles_equation.core - (
+                self.denominator.matrix @ doubles.core
+                + doubles.core @ self.denominator.matrix
+            )
+            residual_norm = self.xp.sqrt(
+                self.xp.vdot(
+                    equation_residual_t1, equation_residual_t1
+                ).real
+                + self.xp.vdot(
+                    equation_residual_core, equation_residual_core
+                ).real
+            )
+            energy = rr_ccsd_energy(
+                doubles,
+                t1,
+                self.fock_ov,
+                self.integrals.L_ov,
+                auxiliary_block_size=self.auxiliary_block_size,
+            ).value
+        except BaseException:
+            doubles_timing.discard()
+            raise
+        doubles_timing.synchronize_and_record()
         self.metrics.increment("iterations")
         return RRIterationResult(
             t1=new_t1,
@@ -366,6 +501,14 @@ class RRCCSDIterationEngine:
         )
 
     def metadata(self) -> dict[str, Any]:
+        term_profile = _RRDoublesPhaseTiming(
+            self.xp, self.metrics
+        ).metadata()
+        term_profile.update({
+            "ring_kernel": self.rr_ring_kernel,
+            "auxiliary_block_size": self.auxiliary_block_size,
+            "virtual_block_size": self.virtual_block_size,
+        })
         return {
             "engine": "RRCCSDIterationEngine",
             "equation": "complete-projected-rccsd",
@@ -378,6 +521,7 @@ class RRCCSDIterationEngine:
             "four_index_eri_in_iteration": False,
             "ring_kernel": self.rr_ring_kernel,
             "convergence_norm": "projected-equation-residual-frobenius",
+            "rr_doubles_term_profiling": term_profile,
             "performance_eligible": False,
         }
 

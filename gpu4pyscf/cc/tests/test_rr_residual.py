@@ -1,5 +1,7 @@
 """Dense-reference tests for factorized RR residual terms."""
 
+import contextlib
+
 import numpy as np
 import pytest
 
@@ -440,6 +442,16 @@ def test_complete_projected_doubles_numerator_matches_dense_equation(full_rank):
     np.testing.assert_allclose(observed.core, expected, atol=5e-10)
     assert observed.materialized_dense_t2 is False
     assert observed.materialized_four_index_eri is False
+    phase_records = []
+
+    @contextlib.contextmanager
+    def profile_phase(name, metadata):
+        phase_records.append(("enter", name, dict(metadata)))
+        try:
+            yield
+        finally:
+            phase_records.append(("exit", name, dict(metadata)))
+
     components = build_projected_ccsd_doubles_components(
         doubles,
         t1,
@@ -454,6 +466,7 @@ def test_complete_projected_doubles_numerator_matches_dense_equation(full_rank):
         level_shift=level_shift,
         auxiliary_block_size=2,
         virtual_block_size=3,
+        profile_phase=profile_phase,
     )
     np.testing.assert_allclose(components.assemble_core(), observed.core)
     offset = np.eye(rank) * 0.125
@@ -462,6 +475,41 @@ def test_complete_projected_doubles_numerator_matches_dense_equation(full_rank):
         observed.core,
     )
     assert components.metadata()["assembled_complete_core"] is False
+    expected_phases = [
+        "rr_doubles_fock_intermediates",
+        "rr_doubles_lagrangian",
+        "rr_doubles_term_linear_t1",
+        "rr_doubles_term_bare_ovov",
+        "rr_doubles_term_woooo",
+        "rr_doubles_term_wvvvv",
+        "rr_doubles_term_one_body",
+        "rr_doubles_term_ring",
+    ]
+    assert [
+        name for action, name, _metadata in phase_records
+        if action == "enter"
+    ] == expected_phases
+    assert [
+        name for action, name, _metadata in phase_records
+        if action == "exit"
+    ] == expected_phases
+    entered_metadata = [
+        metadata for action, _name, metadata in phase_records
+        if action == "enter"
+    ]
+    assert [item["coarse_term"] for item in entered_metadata] == [
+        "fock_intermediates",
+        "lagrangian",
+        "linear_t1",
+        "bare_ovov",
+        "woooo",
+        "wvvvv",
+        "one_body",
+        "ring",
+    ]
+    assert all(item["ring_kernel"] == "reference" for item in entered_metadata)
+    assert all(item["auxiliary_block_size"] == 2 for item in entered_metadata)
+    assert all(item["virtual_block_size"] == 3 for item in entered_metadata)
     gemm = build_projected_ccsd_doubles_numerator(
         doubles,
         t1,

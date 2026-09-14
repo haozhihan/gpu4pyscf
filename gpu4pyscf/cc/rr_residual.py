@@ -29,11 +29,13 @@ update.
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Callable, ContextManager, Mapping, Optional
 
 import numpy as np
 
+from gpu4pyscf.cc.device_runtime import nvtx_range
 from gpu4pyscf.cc.lowrank import RRDoubles, RRProjector
 
 
@@ -44,6 +46,32 @@ def _array_module(array: Any):
 
         return cupy
     return np
+
+
+RRDoublesProfilePhase = Callable[
+    [str, Mapping[str, Any]], ContextManager[Any]
+]
+
+
+@contextlib.contextmanager
+def _rr_doubles_profile_phase(
+    name: str,
+    metadata: Mapping[str, Any],
+    profile_phase: Optional[RRDoublesProfilePhase],
+):
+    """Wrap one coarse RR doubles operation in NVTX and optional timing.
+
+    The callback deliberately owns timing policy.  The residual builder only
+    declares stable phase boundaries and metadata, so a CPU caller can use a
+    wall clock while the resident GPU engine records deferred CUDA events.
+    """
+
+    with nvtx_range(name):
+        if profile_phase is None:
+            yield
+        else:
+            with profile_phase(name, metadata):
+                yield
 
 
 @dataclass(frozen=True)
@@ -2197,6 +2225,7 @@ def build_projected_ccsd_doubles_components(
     virtual_block_size: int = 8,
     ring_kernel: str = "reference",
     transfer_counter: Any = None,
+    profile_phase: Optional[RRDoublesProfilePhase] = None,
 ) -> RRCCSDDoublesComponents:
     """Build every real-RHF RCCSD doubles term without assembling its core.
 
@@ -2236,18 +2265,36 @@ def build_projected_ccsd_doubles_components(
         raise ValueError("auxiliary and virtual block sizes must be positive")
     xp = _array_module(vectors)
 
-    f_intermediates = build_cc_fock_intermediates(
-        doubles,
-        t1,
-        lov,
-        fock_oo,
-        fock_ov,
-        fock_vv,
-        auxiliary_block_size=ablock,
-    )
-    lagrangian = build_cc_lagrangian_one_body(
-        f_intermediates, t1, fock_ov, loo, lov, lvv
-    )
+    def phase_metadata(coarse_term: str) -> dict[str, Any]:
+        return {
+            "coarse_term": coarse_term,
+            "ring_kernel": ring_kernel,
+            "auxiliary_block_size": ablock,
+            "virtual_block_size": vblock,
+        }
+
+    with _rr_doubles_profile_phase(
+        "rr_doubles_fock_intermediates",
+        phase_metadata("fock_intermediates"),
+        profile_phase,
+    ):
+        f_intermediates = build_cc_fock_intermediates(
+            doubles,
+            t1,
+            lov,
+            fock_oo,
+            fock_ov,
+            fock_vv,
+            auxiliary_block_size=ablock,
+        )
+    with _rr_doubles_profile_phase(
+        "rr_doubles_lagrangian",
+        phase_metadata("lagrangian"),
+        profile_phase,
+    ):
+        lagrangian = build_cc_lagrangian_one_body(
+            f_intermediates, t1, fock_ov, loo, lov, lvv
+        )
     occupied_dressing = lagrangian.loo.copy()
     virtual_dressing = lagrangian.lvv.copy()
     occupied_indices = xp.arange(nocc)
@@ -2259,51 +2306,93 @@ def build_projected_ccsd_doubles_components(
         virtual_energies + float(level_shift)
     )
 
-    terms = (
-        projected_linear_t1_doubles(
-            doubles.projector,
-            t1,
-            loo,
-            lov,
-            lvv,
-            auxiliary_block_size=ablock,
-        ),
-        projected_bare_ovov(doubles.projector, lov, nocc, nvir),
-        projected_cc_woooo(
-            doubles,
-            t1,
-            loo,
-            lov,
-            auxiliary_block_size=ablock,
-            virtual_block_size=vblock,
-            transfer_counter=transfer_counter,
-        ),
-        projected_cc_wvvvv(
-            doubles,
-            t1,
-            lov,
-            lvv,
-            auxiliary_block_size=ablock,
-        ),
-        projected_one_body_dressing(
-            doubles, occupied_dressing, virtual_dressing
-        ),
-        (
+    terms: list[RRResidualTermResult] = []
+    with _rr_doubles_profile_phase(
+        "rr_doubles_term_linear_t1",
+        phase_metadata("linear_t1"),
+        profile_phase,
+    ):
+        terms.append(
+            projected_linear_t1_doubles(
+                doubles.projector,
+                t1,
+                loo,
+                lov,
+                lvv,
+                auxiliary_block_size=ablock,
+            )
+        )
+    with _rr_doubles_profile_phase(
+        "rr_doubles_term_bare_ovov",
+        phase_metadata("bare_ovov"),
+        profile_phase,
+    ):
+        terms.append(
+            projected_bare_ovov(doubles.projector, lov, nocc, nvir)
+        )
+    with _rr_doubles_profile_phase(
+        "rr_doubles_term_woooo",
+        phase_metadata("woooo"),
+        profile_phase,
+    ):
+        terms.append(
+            projected_cc_woooo(
+                doubles,
+                t1,
+                loo,
+                lov,
+                auxiliary_block_size=ablock,
+                virtual_block_size=vblock,
+                transfer_counter=transfer_counter,
+            )
+        )
+    with _rr_doubles_profile_phase(
+        "rr_doubles_term_wvvvv",
+        phase_metadata("wvvvv"),
+        profile_phase,
+    ):
+        terms.append(
+            projected_cc_wvvvv(
+                doubles,
+                t1,
+                lov,
+                lvv,
+                auxiliary_block_size=ablock,
+            )
+        )
+    with _rr_doubles_profile_phase(
+        "rr_doubles_term_one_body",
+        phase_metadata("one_body"),
+        profile_phase,
+    ):
+        terms.append(
+            projected_one_body_dressing(
+                doubles, occupied_dressing, virtual_dressing
+            )
+        )
+    with _rr_doubles_profile_phase(
+        "rr_doubles_term_ring",
+        phase_metadata("ring"),
+        profile_phase,
+    ):
+        ring_builder = (
             projected_cc_ring_gemm
             if ring_kernel == "gemm"
             else projected_cc_ring
-        )(
-            doubles,
-            t1,
-            loo,
-            lov,
-            lvv,
-            auxiliary_block_size=ablock,
-            virtual_block_size=vblock,
-        ),
-    )
+        )
+        terms.append(
+            ring_builder(
+                doubles,
+                t1,
+                loo,
+                lov,
+                lvv,
+                auxiliary_block_size=ablock,
+                virtual_block_size=vblock,
+            )
+        )
     return RRCCSDDoublesComponents(
-        terms=terms,
+        terms=tuple(terms),
         fock_intermediates=f_intermediates,
         lagrangian_one_body=lagrangian,
     )
@@ -2326,6 +2415,7 @@ def build_projected_ccsd_doubles_numerator(
     virtual_block_size: int = 8,
     ring_kernel: str = "reference",
     transfer_counter: Any = None,
+    profile_phase: Optional[RRDoublesProfilePhase] = None,
 ) -> RRCCSDDoublesResult:
     """Build every real-RHF RCCSD doubles-numerator term in RR/CD form."""
 
@@ -2345,6 +2435,7 @@ def build_projected_ccsd_doubles_numerator(
         virtual_block_size=virtual_block_size,
         ring_kernel=ring_kernel,
         transfer_counter=transfer_counter,
+        profile_phase=profile_phase,
     )
     return RRCCSDDoublesResult(
         core=components.assemble_core(),
@@ -2355,6 +2446,7 @@ def build_projected_ccsd_doubles_numerator(
 
 
 __all__ = [
+    "RRDoublesProfilePhase",
     "RRResidualTermResult",
     "RRSingleTermResult",
     "CCFockIntermediates",
