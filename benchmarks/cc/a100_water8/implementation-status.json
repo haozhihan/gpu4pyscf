@@ -1,0 +1,993 @@
+{
+  "schema": "gpu4pyscf.water8.implementation-status.v2",
+  "as_of_utc": "2026-09-14T09:18:34.451849+00:00",
+  "purpose": "Candid implementation and MTU evidence ledger for the fixed WATER27 H2O8d2d single-A100 CCSD project.",
+  "claim_policy": {
+    "ten_x_claim_allowed": false,
+    "reason": "The exact-node canonical denominator is established, but no accuracy-qualified RR/THC water8 candidate has completed the required interleaved repetitions.",
+    "evidence_states": [
+      "source_reported",
+      "local_measured",
+      "derived",
+      "hypothesis"
+    ],
+    "rule": "A running job, failed setup, mutable-source profile, small-case endpoint, or isolated-kernel result cannot establish target-case speedup."
+  },
+  "source": {
+    "feature_branch": "feature/a100-thc-rr-ccsd",
+    "frozen_baseline_commit": "a89b3ae018d4e82968323ef95645d91adde294aa",
+    "feature_worktree": "analysis/research/ccsd/gpu4pyscf-a100-thc-rr",
+    "g0_worktree": "analysis/research/ccsd/gpu4pyscf-g0-baseline",
+    "feature_source_state": "reviewed-feature-branch-ready-to-freeze",
+    "feature_performance_eligible": false
+  },
+  "contract": {
+    "evidence_state": "source_reported",
+    "case_id": "water8-tz",
+    "source_case": "WATER27:H2O8d2d",
+    "case_role": "target",
+    "method": "all-electron RHF -> RCCSD",
+    "basis": "spherical cc-pVTZ",
+    "integrals_for_canonical_oracle": "four-index, no DF/CD",
+    "precision_for_canonical_oracle": "FP64",
+    "dimensions": {
+      "nao": 464,
+      "nocc": 40,
+      "nvir": 424,
+      "nelectron": 80
+    },
+    "driver_geometry_sha256": "78edbbea3908d861ca7d1f21c1793a84cefb357352f3d0a22938dcb6d62beffe",
+    "prior_research_geometry_sha256": "5cf241742d00b176764d8cb87ce55429454d97d33d4f27d4bac123b1f6339d7a",
+    "geometry_hash_note": "The current benchmark record and the prior research artifact use different serialization definitions. Formal run matching uses the driver hash recorded in each result; the scientific case identifier and coordinates are unchanged.",
+    "hardware": {
+      "gpu": "NVIDIA A100-SXM4-80GB",
+      "cpu": "2 x AMD EPYC 7513",
+      "link": "PCIe 4.0 x16",
+      "expected_gpu_pci_bus_id": "0000:01:00.0",
+      "expected_gpu_numa_node": 3,
+      "selected_cpu_affinity": "24-31",
+      "selected_cpu_threads": 8,
+      "memory_policy": "preferred NUMA node 3",
+      "current_scheduler_cpu_reservation": 64,
+      "scheduler_reservation_note": "New launchers reserve 64 CPUs so the Slurm cgroup contains GPU-local CPUs 24-31; the topology guard narrows actual execution to exactly eight threads on 24-31.",
+      "matched_run_requirement": "Baseline and candidate comparisons must use the same scheduler reservation and the same guarded execution affinity."
+    },
+    "timing_boundary": "post-HF includes integral transformation, CD/FNO/projector/THC preprocessing, all iterations, final residual checks, FP64 cleanup when used, and one normal checkpoint; SCF and counterpoise jobs are excluded",
+    "frozen_baseline_post_hf_seconds": 1330.347,
+    "target_speedup": 10.0,
+    "derived_exact_target_seconds": 133.0347,
+    "reporting_target_seconds": 133.04,
+    "derived_target_formula": "1330.347 / 10 = 133.0347 seconds",
+    "accuracy": {
+      "canonical_oracle_track_S": {
+        "max_abs_delta_e_corr_eh": 1e-08,
+        "max_abs_delta_e_total_eh": 1e-08,
+        "same_equations_orbitals_electron_space_and_eris": true
+      },
+      "flagship_controlled_track_A": {
+        "max_abs_delta_e_corr_eh": 0.0001,
+        "max_abs_delta_counterpoise_interaction_kcal_mol": 0.02,
+        "max_projected_equation_residual": 1e-06,
+        "full_space_residual_required_as_diagnostic": true
+      }
+    },
+    "resources": {
+      "max_hbm_gib": 72.0,
+      "max_host_rss_gib": 110.0
+    },
+    "counterpoise_definition": "Boys-Bernardi: water8 total energy minus eight monomer total energies, each monomer evaluated in the complete water8 ghost basis with the same orbital, geometry, approximation, and threshold protocol."
+  },
+  "route_roles": {
+    "strict_oracle": "canonical FP64 RCCSD",
+    "flagship": "GPU-resident execution -> tight direct Cholesky -> RR-CCSD -> doubles-amplitude THC-RR-CCSD",
+    "cheap_probe": "FNO-CCSD + Delta-MP2",
+    "combination_policy": "Test FNO with THC-RR only if THC-RR misses 133.04 seconds and FNO independently passes the declared energy and counterpoise budgets."
+  },
+  "source_tracks": [
+    {
+      "id": "g0-profile-mutable",
+      "source_state": "mutable-content-manifest-changed-during-run",
+      "base_revision_label": "a89b3ae018d4e82968323ef95645d91adde294aa",
+      "tree_sha256_at_start": "736e607b75229199d81f7f9f9ff376466eb65fd1344f9456af2670dbada57264",
+      "tree_sha256_after_job": "5c8802fb38b2d9815495c2eba6eb347ec4453e2bfda8d334199247a6aba58e0b",
+      "formal_source_eligible": false,
+      "formal_performance_eligible": false,
+      "use": "profile-only"
+    },
+    {
+      "id": "g0-snapshot-v1-no-runtime",
+      "source_state": "immutable-source-without-compiled-runtime",
+      "tree_sha256": "36c0a990bd3ab978f4f8cf05e4caa0964f310e165c7910b1531dc4187ddcdba9",
+      "formal_source_eligible": false,
+      "formal_performance_eligible": false,
+      "use": "negative packaging evidence"
+    },
+    {
+      "id": "g0-snapshot-v2-incomplete-runtime",
+      "source_state": "canonical-pristine-immutable-but-runtime-closure-incomplete",
+      "tree_sha256": "f687b740d5f00702331a0f8fd87a0a52aa9c60a3c976538b74aeff3e1405cef2",
+      "tracked_source_pristine": true,
+      "runtime_library_count": 12,
+      "required_runtime_library_count": 13,
+      "missing_runtime_library": "libmgrid_v3.so",
+      "formal_source_eligible": false,
+      "formal_performance_eligible": false,
+      "note": "The historical result record says source.formal_performance_eligible=true because its then-current validator did not enforce import-derived runtime closure. This independent ledger supersedes that field for claim eligibility."
+    },
+    {
+      "id": "g0-snapshot-v3-runtime-closed",
+      "source_state": "canonical-pristine-immutable-runtime-closed",
+      "deployment_profile": "g0-canonical-pristine",
+      "tree_sha256": "617568b3e633601440264c924f1c19fba3027a404501c1db2c3f4c47c9f6bbfd",
+      "base_revision": "a89b3ae018d4e82968323ef95645d91adde294aa",
+      "tracked_source_pristine": true,
+      "head_matches_frozen_base": true,
+      "untracked_paths_allowlisted": true,
+      "runtime_library_count": 13,
+      "required_runtime_library_count": 13,
+      "runtime_closure_complete": true,
+      "writable_paths": 0,
+      "manifest_sha256": "c32fd7427eabae55529b38f49b22063ce52d3943f78dfaf9a24f5b0ea7d1f802",
+      "runtime_build_manifest_sha256": "521fe2486cbe4becbfe025a80c60cf81ceec2b248aaa97e9a53d93cf790c074f",
+      "formal_source_eligible": true,
+      "note": "Each completed performance record must still prove the same manifest and tree at run start and end."
+    },
+    {
+      "id": "candidate-snapshot-d7a829ec",
+      "source_state": "immutable-candidate-content-manifest-runtime-closed",
+      "deployment_profile": "candidate",
+      "tree_sha256": "d7a829ec9f25f9836903a44cf354997b21d52ed8b0c5ae40bb446b5509e828ad",
+      "base_revision_label": "a89b3ae018d4e82968323ef95645d91adde294aa",
+      "tracked_source_pristine": false,
+      "source_content_committed": false,
+      "source_file_count": 966,
+      "runtime_library_count": 13,
+      "required_runtime_library_count": 13,
+      "runtime_closure_complete": true,
+      "writable_paths": 0,
+      "manifest_sha256": "632dfeefe8d85bf1caf69151d469beeb9e4a1da13551e26c84b5b4ac322ee228",
+      "independent_remote_validator_passes": 2,
+      "formal_source_eligible": true,
+      "note": "Candidate eligibility comes from its sealed content hash, candidate profile, complete runtime closure, and read-only validation; it is not represented as a pristine baseline commit."
+    },
+    {
+      "id": "feature-candidate-unfrozen",
+      "source_state": "dirty-uncommitted-development-tree",
+      "formal_source_eligible": false,
+      "formal_performance_eligible": false,
+      "use": "implementation and local correctness only",
+      "missing": "sealed candidate snapshot with start/end validation"
+    }
+  ],
+  "gates": [
+    {
+      "id": "G0",
+      "name": "freeze-reproduce-profile",
+      "evidence_state": "local_measured",
+      "state": "exact-node-five-run-baseline-passed",
+      "decision": "use-measured-denominator-and-proceed-to-candidate-gates",
+      "verified": [
+        "Fixed post-HF timing and numerical contract are encoded in the harness.",
+        "Water2 topology comparison selected physical CPUs 24-31: 10.810 s median, 1.50% sample CV versus 11.101 s and 1.72% for 16 logical threads.",
+        "Import-derived runtime closure is complete: 13/13 shared libraries, including libmgrid_v3.so.",
+        "G0 snapshot 617568b3... is read-only, tracked-pristine at commit a89b3ae..., and has zero writable paths.",
+        "Job 62379 completed the water2 canonical sanity calculation from that snapshot with valid start/end provenance.",
+        "Job 62387 completed the water4 canonical development oracle from the same source track: 78.77706354297698 s post-HF with a 3.988950089055877e-08 full-space equation residual.",
+        "Five fresh-process canonical water8 runs on compute-1-6 passed source, topology, convergence, checkpoint, and resource consistency.",
+        "Exact-node canonical post-HF median is 1786.21861028485 s with 0.6786100581998003% sample CV (jobs 62413, 62433-62436)."
+      ],
+      "negative_evidence": [
+        "Job 62356 failed before compute because the first immutable package omitted compiled runtime libraries.",
+        "Job 62364 failed before a converged HF because the 12-library package omitted libmgrid_v3.so.",
+        "Job 62381 was rejected before benchmark Python because the assigned GPU was NUMA 1 instead of NUMA 3.",
+        "Jobs 62382 and 62386 were rejected before benchmark Python because their Slurm CPU cgroups excluded the required GPU-local CPUs 24-31, even though the GPU itself was on NUMA 3."
+      ],
+      "active": [],
+      "missing": [
+        "Interleave the established canonical denominator with final qualified candidate repetitions.",
+        "Nsight Systems and Nsight Compute evidence from the final sealed candidate source track."
+      ]
+    },
+    {
+      "id": "G1",
+      "name": "gpu-resident-canonical",
+      "evidence_state": "local_measured",
+      "state": "water2-water4-water8-equation-preserving-gate-passed",
+      "decision": "retain-gpu-resident-layer-and-proceed-to-tight-cd-rr",
+      "method_class": "equation-preserving",
+      "acceptance_table": "S",
+      "implemented": [
+        "Canonical t1/t2 remain CuPy arrays through the resident iteration loop.",
+        "Static Fock, MO-energy, and ERI data are uploaded once for the compatible production path.",
+        "GPU energy, norm, and damping operations avoid per-iteration full-amplitude host copies.",
+        "DIIS uses one packed host transfer in each direction with pinned host storage; final amplitudes are downloaded once.",
+        "Phase arena, workspace reuse, transfer counters, and backend autotuning are present.",
+        "Unsupported subclasses, callbacks, complex amplitudes, and custom hooks fail to the compatibility path.",
+        "CUDA-event residual subphase timing preserves nesting under the complete update phase.",
+        "Exceptional exits clean pending CUDA events, resident ERI caches, and workspace-planner state."
+      ],
+      "local_verification": {
+        "evidence_state": "local_measured",
+        "focused_tests": {
+          "passed": 21,
+          "skipped_cuda": 4,
+          "failed": 0
+        },
+        "broader_related_tests": {
+          "passed": 102,
+          "skipped_cuda": 21,
+          "failed": 0
+        },
+        "py_compile_passed": true,
+        "git_diff_check_passed": true,
+        "mtu_validation_completed": true,
+        "mtu_partial_validation": {
+          "job_id": "62388",
+          "a100_device_and_algorithm_tests_passed": 164,
+          "benchmark_harness_tests_passed": 168,
+          "benchmark_harness_subtests_passed": 5,
+          "numerical_or_device_test_failures": 0,
+          "full_job_passed": false,
+          "failure_stage": "final self_check read-only snapshot compatibility"
+        },
+        "mtu_final_validation": {
+          "run_id": "g1-a6a876b4",
+          "source_tree_sha256": "a6a876b48507af6edc3bd0a449089dca7f0f997653125bfd990a5229f7b39aec",
+          "water2_energy_abs_delta_eh": 4.440892098500626e-15,
+          "water4_energy_abs_delta_eh": 5.3290705182007514e-14,
+          "water8_energy_abs_delta_eh": 3.6282088444750116e-13,
+          "water8_legacy_post_hf_seconds": 1016.3456664774567,
+          "water8_resident_post_hf_seconds": 869.2149962764233,
+          "water8_same_source_speedup": 1.1692684443219656,
+          "water8_peak_hbm_gib": 70.796875,
+          "water8_peak_host_rss_gib": 63.25617980957031
+        }
+      },
+      "missing": [
+        "Final candidate interleaved repetitions after the algorithmic RR/THC gates.",
+        "Nsight transfer/kernel evidence from the final sealed source track."
+      ]
+    },
+    {
+      "id": "G2",
+      "name": "fno-ccsd-delta-mp2-probe",
+      "evidence_state": "local_measured",
+      "state": "implementation-ready-measurement-pending",
+      "decision": "run-water4-grid-after-g1-correctness",
+      "method_class": "controlled-approximation",
+      "acceptance_table": "A",
+      "implemented": [
+        "FNO construction from PySCF MP2 natural orbitals.",
+        "Active virtual-space mask validation and Delta-MP2 correction accounting.",
+        "Declared occupation-cutoff grid generation and candidate metadata."
+      ],
+      "missing": [
+        "Water4 cutoff sweep",
+        "Energy and counterpoise error curves",
+        "Qualified water8 candidate timing"
+      ]
+    },
+    {
+      "id": "G3",
+      "name": "tight-direct-cholesky",
+      "evidence_state": "local_measured",
+      "state": "selected-gint-abi-v2-built-qualification-snapshot-pending",
+      "decision": "publish-v3-candidate-and-run-a-b-runtime-gates",
+      "method_class": "integral-factorized",
+      "acceptance_table": "I",
+      "implemented": [
+        "Matrix-free pivoted-Cholesky algebra over selected AO-pair columns.",
+        "PSD, provider-consistency, packed-pair, and reconstruction checks.",
+        "Water1 selected-column, diagonal, and full unique-pair reconstruction checks on A100.",
+        "Bounded selected-column GINT ABI v2 exports explicit Rys-7/8 workspace queries."
+      ],
+      "limitations": [
+        "The current GINT diagonal and every selected pivot traverse all shell quartets.",
+        "The rebuilt CUDA 12.8 sm_80 runtime must pass snapshot A qualification and snapshot B release gates before direct-CD timing."
+      ],
+      "missing": [
+        "Production selected-shell-pair gather/contract kernel",
+        "Non-Npair diagonal path",
+        "Water2/water4/water8 thresholds 1e-4, 1e-6, and 1e-8 with energy and counterpoise errors"
+      ]
+    },
+    {
+      "id": "G4",
+      "name": "rr-ccsd",
+      "evidence_state": "local_measured",
+      "state": "direct-cd-lifecycle-implemented-water2-gate-pending",
+      "decision": "run-bounded-direct-cd-smoke-then-full-water2-correctness",
+      "method_class": "controlled-approximation",
+      "acceptance_table": "A",
+      "implemented": [
+        "Matrix-free MP2 pair operator and device Lanczos projector with orthogonality/rank gates.",
+        "Projected denominator solve, singles numerator, doubles numerator, compressed DIIS, and GPU iteration engine.",
+        "Public RR/direct-CD lifecycle is wired.",
+        "An explicit post-convergence reconstructed full-space residual diagnostic is available outside the normal timed path and records its own time, transfer, and resource metadata.",
+        "Water1 STO-3G full-rank endpoint converged in job 62321 and reproduced dense PySCF RCCSD correlation energy within 1.7149630326951382e-10 Eh."
+      ],
+      "local_verification": {
+        "rr_thc_reviewer_focused": {
+          "passed": 64,
+          "skipped_environment": 1,
+          "failed": 0
+        },
+        "mtu_cuda_numerical_gate_completed": false,
+        "combined_cpu_suite": {
+          "passed": 759,
+          "skipped_environment": 35,
+          "failed": 0
+        }
+      },
+      "limitations": [
+        "Job 62321 used the auxiliary-basis DF validation adapter, not production tight direct Cholesky.",
+        "Water2 was rank-capped at 32 and only a one-step equation was run without dense oracle.",
+        "The bounded-memory ring/reference kernels are performance-ineligible."
+      ],
+      "missing": [
+        "Converged water2 and water4 threshold evidence",
+        "Counterpoise records that preserve realized RR runtime metadata and rank",
+        "Fused production contractions",
+        "Qualified water8 RR timing and error"
+      ]
+    },
+    {
+      "id": "G5",
+      "name": "doubles-amplitude-thc-rr-ccsd",
+      "evidence_state": "local_measured",
+      "state": "shared-r123-complement-proof-implemented-inexact-fail-closed",
+      "decision": "gpu-validate-full-pair-endpoint-then-fuse-before-inexact-gates",
+      "method_class": "controlled-approximation",
+      "acceptance_table": "A",
+      "implemented": [
+        "Weighted CP/ALS factor construction and reconstruction diagnostics.",
+        "Paper Algorithms 1-3 are evaluated against arbitrary-pair dense references.",
+        "The doubles residual is exposed as complete_rr = exact_r123 + complement.",
+        "The only replacement seam composes complement + backproject(thc_algorithms_1_3), preventing double counting.",
+        "The full-pair endpoint records replacement_applied only after a successful Jacobi application.",
+        "The formal thc_cd route requires explicit rank and replacement-validation tolerances.",
+        "Inexact direct-CD THC ranks and all performance claims remain fail closed."
+      ],
+      "local_verification": {
+        "shared_decomposition_focused": {
+          "passed": 25,
+          "skipped_environment": 6,
+          "failed": 0
+        },
+        "independent_review": "no-P0-P1-P2",
+        "combined_cpu_suite": {
+          "passed": 759,
+          "skipped_environment": 35,
+          "failed": 0
+        },
+        "mtu_cuda_numerical_gate_completed": false
+      },
+      "limitations": [
+        "The proof builder evaluates complete RR and exact R123 separately before subtraction; duplicate contractions are not fused yet.",
+        "Only Algorithms 1-3 are replaced; their complement remains the exact RR equation.",
+        "No inexact THC production substitution is accepted until water2 and water4 residual/accuracy gates pass."
+      ],
+      "missing": [
+        "A100 full-pair endpoint validation from a sealed release snapshot.",
+        "Fused shared contractions that avoid separately computing complete RR and exact R123.",
+        "Term-by-term inexact water2/water4 comparison.",
+        "Counterpoise records with realized THC rank and replacement status.",
+        "THC fit-inclusive qualified water8 timing and error."
+      ]
+    },
+    {
+      "id": "G6",
+      "name": "precision-recovery",
+      "evidence_state": "source_reported",
+      "state": "gated-not-started",
+      "decision": "hold",
+      "method_class": "precision-recovery",
+      "entry_condition": "FP64 THC-RR is correct under the declared water2/water4 gates but its complete water8 post-HF time exceeds 133.04 seconds.",
+      "missing": [
+        "Eligible FP64 predecessor",
+        "TF32/FP32 fixed-amplitude error data",
+        "Final FP64 energy/residual checks and at least two cleanup iterations",
+        "Complete-stage speedup of at least 10% versus the eligible FP64 predecessor"
+      ]
+    }
+  ],
+  "verification_summary": {
+    "evidence_state": "local_measured",
+    "combined_cpu_suite": {
+      "passed": 759,
+      "skipped_environment": 35,
+      "failed": 0,
+      "excluded_upstream_test": "gpu4pyscf/cc/tests/test_ccsd.py requires an installed local pyscf"
+    },
+    "release_runtime_contract_review": "no-P0-P1-P2",
+    "thc_shared_decomposition_review": "no-P0-P1-P2",
+    "bash_syntax_passed": true,
+    "python_compile_passed": true,
+    "git_diff_and_whitespace_passed": true,
+    "candidate_mtu_validation_completed": false,
+    "known_evidence_gap": "The new CUDA 12.8 sm_80 runtime and shared R123 endpoint still require snapshot A/B gates and A100 execution."
+  },
+  "mtu_job_ledger": [
+    {
+      "job_id": "62343",
+      "scheduler_state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed": "00:24:05",
+      "case_id": "water8-tz",
+      "method": "canonical",
+      "source_track": "g0-profile-mutable",
+      "evidence_state": "local_measured",
+      "classification": "profile-only",
+      "formal_performance_eligible": false,
+      "reason": "Source content changed during the run.",
+      "measurements": {
+        "post_hf_seconds": 1431.0355338286608,
+        "cc_iterations": 15,
+        "e_corr_eh": -2.2930658662858328,
+        "full_space_equation_residual": 5.5907745406777437e-08,
+        "direct_vvvv_ovvv_seconds": 773.7728301268071,
+        "direct_vvvv_ovvv_post_hf_percent": 54.07083275260246,
+        "d2h_gib": 960.3978562355042,
+        "h2d_gib": 34.29157257080078,
+        "total_transfer_gib": 994.6894288063049,
+        "peak_hbm_gib": 63.984375,
+        "peak_host_rss_gib": 70.49205017089844
+      },
+      "raw_result": "results/mtu/g0-profiling/water8-tz__canonical__rg0-canonical-a.json",
+      "raw_result_sha256": "5dbfcc8f23ac75df5881aa0fd78a027b3e30fb097306902ed03d9769f971a7ff",
+      "provenance": "results/mtu/g0-profiling/water8-tz__canonical__rg0-canonical-a.provenance.json"
+    },
+    {
+      "job_id": "62356",
+      "scheduler_state": "FAILED",
+      "exit_code": "2:0",
+      "elapsed": "00:00:05",
+      "case_id": "water8-tz",
+      "method": "canonical",
+      "source_track": "g0-snapshot-v1-no-runtime",
+      "evidence_state": "local_measured",
+      "classification": "pre-compute-snapshot-packaging-failure",
+      "formal_performance_eligible": false,
+      "hf_entered": false,
+      "ccsd_entered": false,
+      "root_cause": "The immutable source snapshot omitted compiled GPU4PySCF runtime shared libraries.",
+      "secondary_harness_error": "The HBM monitor close path attempted to join a thread before start; this was subsequently fixed.",
+      "raw_result": "results/mtu/g0-immutable-failed-62356/water8-tz__canonical__rg0-immutable-a.json",
+      "raw_result_sha256": "7d5adb276ee09657c0e78a0264e78a084097040f9ba39ad2c52278e3af7a02c5"
+    },
+    {
+      "job_id": "62364",
+      "scheduler_state": "FAILED",
+      "exit_code": "1:0",
+      "elapsed": "00:00:08",
+      "case_id": "water2-tz",
+      "method": "canonical",
+      "source_track": "g0-snapshot-v2-incomplete-runtime",
+      "evidence_state": "local_measured",
+      "classification": "pre-hf-runtime-closure-failure",
+      "formal_performance_eligible": false,
+      "hf_converged": false,
+      "ccsd_entered": false,
+      "root_cause": "Exact a89 source imports gpu4pyscf.pbc.dft.multigrid_v3, but libmgrid_v3.so was absent from the 12-library bundle.",
+      "raw_record_eligibility_field_superseded": true,
+      "raw_result": "results/mtu/g0-v2-smoke-failed-62364/water2-tz__canonical__rg0-v2-smoke-1.json",
+      "raw_result_sha256": "203a1d5b04219ae2fdb8182b452c540115c304055a2b4c4e891c61c42bef2ced"
+    },
+    {
+      "job_id": "62379",
+      "scheduler_state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed": "00:00:30",
+      "case_id": "water2-tz",
+      "case_role": "sanity",
+      "method": "canonical",
+      "source_track": "g0-snapshot-v3-runtime-closed",
+      "evidence_state": "local_measured",
+      "classification": "source-topology-and-water2-sanity-pass",
+      "formal_performance_eligible": true,
+      "formal_source_and_topology_eligible": true,
+      "target_speed_claim_eligible": false,
+      "reason_target_ineligible": "This is water2, not the fixed water8 target, and it is a single run.",
+      "source_validation": {
+        "tree_stable_during_run": true,
+        "manifest_stable_during_run": true,
+        "valid_at_start": true,
+        "valid_at_end": true,
+        "runtime_binaries_valid_at_start": true,
+        "runtime_binaries_valid_at_end": true,
+        "read_only_at_start": true,
+        "read_only_at_end": true
+      },
+      "measurements": {
+        "nao": 116,
+        "nocc": 10,
+        "nvir": 106,
+        "hf_seconds": 3.5266313795000315,
+        "post_hf_seconds": 10.818767242133617,
+        "cc_iterations": 11,
+        "hf_converged": true,
+        "cc_converged": true,
+        "e_hf_eh": -152.1205477194566,
+        "e_corr_eh": -0.5644876834223559,
+        "e_total_eh": -152.68503540287895,
+        "full_space_equation_residual": 6.894988359521113e-07,
+        "jacobi_update_norm": 3.217334505877569e-07,
+        "peak_hbm_mib": 37504,
+        "peak_host_rss_gib": 1.1981201171875
+      },
+      "raw_result": "results/mtu/g0-v3-smoke-62379/water2-tz__canonical__rg0-v3-smoke-1.json",
+      "raw_result_sha256": "e827b3d798b1165f4f126a12887b7a0c754d6e9d4f7cf7cbb3ac2ddd80d8670c"
+    },
+    {
+      "job_id": "62380",
+      "scheduler_state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed": "00:23:57",
+      "application_record_duration_seconds": 1424.320442,
+      "node": "compute-1-0",
+      "case_id": "water8-tz",
+      "case_role": "target",
+      "method": "canonical",
+      "repeat": "g0-immutable-a3",
+      "source_track": "g0-snapshot-v3-runtime-closed",
+      "evidence_state": "local_measured",
+      "classification": "formal-canonical-water8-baseline-single-sample",
+      "formal_performance_eligible": true,
+      "ten_x_claim_eligible": false,
+      "reason_ten_x_ineligible": "This is one canonical denominator sample; the project requires at least three baseline samples and an accuracy-qualified candidate.",
+      "source_validation": {
+        "tree_sha256": "617568b3e633601440264c924f1c19fba3027a404501c1db2c3f4c47c9f6bbfd",
+        "tree_stable_during_run": true,
+        "manifest_sha256_at_start": "c32fd7427eabae55529b38f49b22063ce52d3943f78dfaf9a24f5b0ea7d1f802",
+        "manifest_sha256_at_end": "c32fd7427eabae55529b38f49b22063ce52d3943f78dfaf9a24f5b0ea7d1f802",
+        "valid_at_start": true,
+        "valid_at_end": true,
+        "runtime_binaries_valid_at_start": true,
+        "runtime_binaries_valid_at_end": true,
+        "read_only_at_start": true,
+        "read_only_at_end": true,
+        "writable_paths": []
+      },
+      "topology_validation": {
+        "performance_eligible": true,
+        "gpu_pci_bus_id": "0000:01:00.0",
+        "gpu_numa_node": 3,
+        "cpu_affinity": "24-31",
+        "execution_threads": 8,
+        "memory_policy": "preferred:3"
+      },
+      "measurements": {
+        "nao": 464,
+        "nocc": 40,
+        "nvir": 424,
+        "hf_seconds": 10.170153923332691,
+        "post_hf_seconds": 1409.1478827688843,
+        "hf_plus_post_hf_seconds": 1419.318036692217,
+        "cc_iterations": 15,
+        "hf_converged": true,
+        "cc_converged": true,
+        "e_hf_eh": -608.5425887244022,
+        "e_corr_eh": -2.293065866286348,
+        "e_total_eh": -610.8356545906886,
+        "full_space_equation_residual": 5.590758760082886e-08,
+        "jacobi_update_norm": 2.788381227036836e-08,
+        "peak_hbm_mib": 65518,
+        "peak_hbm_gib": 63.982421875,
+        "peak_host_rss_gib": 74.4542350769043,
+        "explicit_transfer_accounting_available": false,
+        "transfer_counter_note": "The zero-valued generic RunMetrics transfer map does not instrument canonical solver internals and must not be interpreted as zero PCIe traffic."
+      },
+      "checkpoint": {
+        "included_in_post_hf": true,
+        "local_presence": false,
+        "remote_bytes": 2301270264,
+        "remote_sha256": "b6945564b34bb2f6e9d01b022adbb7e002a2685ae82a20b5c4520670d3621607",
+        "reason_not_local": "The 2.30 GB checkpoint remains on MTU; its remote byte count and SHA-256 are preserved in the result JSON."
+      },
+      "raw_result": "results/mtu/g0-immutable-baseline-v3-62380/water8-tz__canonical__rg0-immutable-a3.json",
+      "raw_result_sha256": "0e0002e0a620cbd2bb270234535f8c0792b29742ecc570276ee13c47883e71dc",
+      "raw_method_log": "results/mtu/g0-immutable-baseline-v3-62380/water8-tz__canonical__rg0-immutable-a3.log",
+      "raw_method_log_sha256": "16e168c6c6902f205964caf0953c7dec21e4bc3d2a60c6d447e9f38bcc4b6133",
+      "raw_scheduler_log": "results/mtu/g0-immutable-baseline-v3-62380/benchmark-62380.log",
+      "raw_scheduler_log_sha256": "9d15f422de069fd7b1c339e664690d215b82e5a175f340b2ba105180a543321a",
+      "topology_record": "results/mtu/g0-immutable-baseline-v3-62380/physical8-benchmark-62380.json",
+      "topology_record_sha256": "b4fd3712fbe73bfcd9fcdaaac5ee6f4822b57b6c18f6e581595871bd75777146"
+    },
+    {
+      "job_id": "62381",
+      "scheduler_state": "FAILED",
+      "exit_code": "3:0",
+      "elapsed": "00:00:07",
+      "node": "compute-1-0",
+      "evidence_state": "local_measured",
+      "classification": "topology-gate-rejection-not-compute-failure",
+      "formal_performance_eligible": false,
+      "benchmark_python_entered": false,
+      "hf_entered": false,
+      "ccsd_entered": false,
+      "observed_gpu_pci_bus_id": "0000:41:00.0",
+      "observed_gpu_numa_node": 1,
+      "observed_gpu_node_cpulist": "8-15,72-79",
+      "allowed_cpulist_before": "32-63,96-127",
+      "exact_guard_reasons": [
+        "GPU NUMA node is 1, expected 3",
+        "Slurm cgroup does not contain the required eight GPU-local cores for physical8; selected 0 of 8 threads"
+      ],
+      "raw_result": null,
+      "next_update": "Sync the topology-guard stdout as a raw negative artifact when available."
+    },
+    {
+      "job_id": "62382",
+      "scheduler_state": "FAILED",
+      "exit_code": "3:0",
+      "elapsed": "00:00:06",
+      "node": "compute-1-0",
+      "submitted_case_id": "water4-tz",
+      "submitted_method": "canonical",
+      "submitted_repeat": "g0-water4-oracle-2",
+      "submitted_output_root": "$TASK/results/g0-validation",
+      "dependency": "afterok:62380",
+      "expected_source_track": "g0-snapshot-v3-runtime-closed",
+      "evidence_state": "local_measured",
+      "classification": "topology-gate-rejection-not-compute-failure",
+      "formal_performance_eligible": false,
+      "benchmark_python_entered": false,
+      "hf_entered": false,
+      "ccsd_entered": false,
+      "observed_gpu_pci_bus_id": "0000:01:00.0",
+      "observed_gpu_numa_node": 3,
+      "observed_gpu_node_cpulist": "24-31,88-95",
+      "allowed_cpulist_before": "0-15,34-49,64-79,98-113",
+      "gpu_local_cpu_intersection": "empty",
+      "root_cause": "The Slurm CPU cgroup excluded every required GPU-local physical core 24-31.",
+      "raw_result": null
+    },
+    {
+      "job_id": "62386",
+      "scheduler_state": "FAILED",
+      "exit_code": "3:0",
+      "elapsed": "00:00:04",
+      "node": "compute-1-0",
+      "submitted_case_id": "water4-tz",
+      "submitted_method": "canonical",
+      "expected_source_track": "g0-snapshot-v3-runtime-closed",
+      "launcher_experiment": "--gres-flags=enforce-binding",
+      "evidence_state": "local_measured",
+      "classification": "topology-gate-rejection-not-compute-failure",
+      "formal_performance_eligible": false,
+      "benchmark_python_entered": false,
+      "hf_entered": false,
+      "ccsd_entered": false,
+      "observed_gpu_pci_bus_id": "0000:01:00.0",
+      "observed_gpu_numa_node": 3,
+      "observed_gpu_node_cpulist": "24-31,88-95",
+      "allowed_cpulist_before": "0-15,34-49,64-79,98-113",
+      "gpu_local_cpu_intersection": "empty",
+      "root_cause": "--gres-flags=enforce-binding did not add the GPU-local CPU set to the Slurm cgroup.",
+      "raw_result": null
+    },
+    {
+      "job_id": "62387",
+      "scheduler_state": "COMPLETED",
+      "exit_code": "0:0",
+      "elapsed": "00:01:44",
+      "node": "compute-1-6",
+      "case_id": "water4-tz",
+      "case_role": "development",
+      "method": "canonical",
+      "repeat": "g0-water4-oracle-4",
+      "source_track": "g0-snapshot-v3-runtime-closed",
+      "evidence_state": "local_measured",
+      "classification": "formal-canonical-water4-development-oracle",
+      "formal_performance_eligible": true,
+      "formal_profile_source_and_topology_eligible": true,
+      "target_speed_claim_eligible": false,
+      "reason_target_ineligible": "This is the water4 development case, not the fixed water8 target.",
+      "scheduler_cpu_reservation": 64,
+      "topology_validation": {
+        "performance_eligible": true,
+        "gpu_numa_node": 3,
+        "allowed_cpulist_before": "0-127",
+        "cpu_affinity_after_guard": "24-31",
+        "execution_threads": 8,
+        "memory_policy": "preferred:3"
+      },
+      "source_validation": {
+        "tree_sha256": "617568b3e633601440264c924f1c19fba3027a404501c1db2c3f4c47c9f6bbfd",
+        "tree_stable_during_run": true,
+        "manifest_sha256_at_start": "c32fd7427eabae55529b38f49b22063ce52d3943f78dfaf9a24f5b0ea7d1f802",
+        "manifest_sha256_at_end": "c32fd7427eabae55529b38f49b22063ce52d3943f78dfaf9a24f5b0ea7d1f802",
+        "valid_at_start": true,
+        "valid_at_end": true,
+        "runtime_binaries_valid_at_start": true,
+        "runtime_binaries_valid_at_end": true,
+        "read_only_at_start": true,
+        "read_only_at_end": true
+      },
+      "measurements": {
+        "nao": 232,
+        "nocc": 20,
+        "nvir": 212,
+        "hf_seconds": 6.9182305335998535,
+        "post_hf_seconds": 78.77706354297698,
+        "hf_plus_post_hf_seconds": 85.69529407657683,
+        "cc_iterations": 15,
+        "hf_converged": true,
+        "cc_converged": true,
+        "e_hf_eh": -304.2616074555252,
+        "e_corr_eh": -1.1393636027995075,
+        "e_total_eh": -305.4009710583247,
+        "full_space_equation_residual": 3.988950089055877e-08,
+        "jacobi_update_norm": 1.9281060734979443e-08,
+        "peak_hbm_mib": 41958,
+        "peak_hbm_gib": 40.974609375,
+        "peak_host_rss_gib": 6.3456878662109375
+      },
+      "checkpoint": {
+        "included_in_post_hf": true,
+        "local_presence": false,
+        "remote_bytes": 143856396,
+        "remote_sha256": "dab868a5267d848d0b6329c1ec7af7d1d008b6e0f53f6afa7762759ad7c6bfb8",
+        "reason_not_local": "The checkpoint remains on MTU; its remote byte count and SHA-256 are preserved in the result JSON."
+      },
+      "raw_result": "results/mtu/g0-water4-oracle-62387/water4-tz__canonical__rg0-water4-oracle-4.json",
+      "raw_result_sha256": "7d5ea855b523e63a2652ad4c43de2d0792512416dbec07e1368a5cb7b9fe7d5e",
+      "raw_method_log": "results/mtu/g0-water4-oracle-62387/water4-tz__canonical__rg0-water4-oracle-4.log",
+      "raw_method_log_sha256": "279fde49bfb522af57a5630deac072bdfd2e0c81deae056ef79f02965b543b9f",
+      "raw_scheduler_log": "results/mtu/g0-water4-oracle-62387/benchmark-62387.log",
+      "raw_scheduler_log_sha256": "57f85571aa631975d2c5cac40048dac6808f95c53c6fbe5104eb497ece16d405",
+      "topology_record": "results/mtu/g0-water4-oracle-62387/physical8-benchmark-62387.json",
+      "topology_record_sha256": "8028752657e769b4c59abe9b7376c96dbdee99918d6e93a98d51608255b114ae"
+    },
+    {
+      "job_id": "62388",
+      "scheduler_state": "FAILED",
+      "exit_code": "1:0",
+      "elapsed": "00:01:14",
+      "node": "compute-1-0",
+      "job_name": "rrccsd-gpu-tests",
+      "source_track": "candidate-snapshot-d7a829ec",
+      "evidence_state": "local_measured",
+      "classification": "harness-self-check-failure-after-device-tests-passed",
+      "formal_performance_eligible": false,
+      "candidate_numerical_failure": false,
+      "candidate_performance_failure": false,
+      "tests": {
+        "a100_device_and_algorithm": {
+          "passed": 164,
+          "seconds": 59.34,
+          "failed": 0
+        },
+        "benchmark_harness": {
+          "passed": 168,
+          "subtests_passed": 5,
+          "seconds": 7.51,
+          "failed": 0
+        }
+      },
+      "failure_stage": "final self_check.py",
+      "root_cause": "benchmark.py --dry-run tried to create its default results directory inside the immutable source snapshot and raised PermissionError [Errno 13].",
+      "repair": "Return from dry-run before output-directory creation, add a regression test, deploy a new content-addressed candidate snapshot, and rerun the complete job.",
+      "remote_log": "$TASK/logs/gpu-tests-62388.log",
+      "raw_result": null
+    },
+    {
+      "job_id": "62468-62471",
+      "scheduler_state": "COMPLETED",
+      "case_id": "water2-tz,water4-tz",
+      "method": "canonical_legacy/canonical",
+      "source_track": "candidate-snapshot-a6a876b4",
+      "evidence_state": "local_measured",
+      "classification": "g1-small-case-equation-preserving-gate",
+      "formal_performance_eligible": true,
+      "measurements": {
+        "water2_energy_abs_delta_eh": 4.440892098500626e-15,
+        "water4_energy_abs_delta_eh": 5.3290705182007514e-14,
+        "water2_same-source-speedup": 1.147650636840313,
+        "water4_same-source-speedup": 1.2668838835676715
+      },
+      "analysis": "results/mtu/g1-a6a876b4/g1-a6a876b4-final-analysis.json"
+    },
+    {
+      "job_id": "62527-62528",
+      "scheduler_state": "COMPLETED",
+      "case_id": "water8-tz",
+      "method": "canonical_legacy/canonical",
+      "source_track": "candidate-snapshot-a6a876b4",
+      "evidence_state": "local_measured",
+      "classification": "g1-water8-equation-preserving-a-b",
+      "formal_performance_eligible": true,
+      "ten_x_claim_eligible": false,
+      "measurements": {
+        "energy_abs_delta_eh": 3.6282088444750116e-13,
+        "legacy_post_hf_seconds": 1016.3456664774567,
+        "resident_post_hf_seconds": 869.2149962764233,
+        "same_source_speedup": 1.1692684443219656,
+        "frozen_baseline_speedup": 1.5305154716600515,
+        "exact_node_baseline_speedup": 2.0549790534410035,
+        "peak_hbm_gib": 70.796875,
+        "peak_host_rss_gib": 63.25617980957031
+      },
+      "analysis": "results/mtu/g1-a6a876b4/g1-a6a876b4-final-analysis.json"
+    }
+  ],
+  "supporting_evidence": {
+    "water2_topology_selection": {
+      "evidence_state": "local_measured",
+      "result": "results/mtu/water2-topology-comparison.json",
+      "sha256": "7ccc6d99bc376a027c0c546163db39fc0dbfa167db93a59bb609aef7294f9e14",
+      "physical8_median_seconds": 10.81,
+      "physical8_sample_cv_percent": 1.5,
+      "logical16_median_seconds": 11.101,
+      "logical16_sample_cv_percent": 1.72,
+      "selected": "physical8",
+      "selected_cpu_affinity": "24-31"
+    },
+    "runtime_closure": {
+      "evidence_state": "local_measured",
+      "build_manifest": "results/mtu/runtime-closure-a89/build-manifest.json",
+      "build_manifest_sha256": "521fe2486cbe4becbfe025a80c60cf81ceec2b248aaa97e9a53d93cf790c074f",
+      "snapshot_manifest": "results/mtu/runtime-closure-a89/g0-snapshot-manifest.json",
+      "snapshot_manifest_sha256": "c32fd7427eabae55529b38f49b22063ce52d3943f78dfaf9a24f5b0ea7d1f802",
+      "built_target": "mgrid_v3",
+      "compiler": "CUDA 12.8 V12.8.61",
+      "cuda_architecture": "80-real",
+      "runtime_libraries": "13/13"
+    },
+    "rr_water1_full_rank": {
+      "evidence_state": "local_measured",
+      "job_id": "62321",
+      "result": "results/mtu/rr-smoke-water1-sto3g-62321.json",
+      "sha256": "0739ab6f897b87fa2c68eca2084d5a81b2175bbddbcfeb4b44ce98b5b7bf66d5",
+      "candidate_converged": true,
+      "dense_oracle_converged": true,
+      "correlation_energy_abs_error_eh": 1.7149630326951382e-10,
+      "projected_equation_residual": 8.894838785426803e-09,
+      "performance_eligible": false
+    },
+    "gint_water1_selected_column_gate": {
+      "evidence_state": "local_measured",
+      "job_id": "62326",
+      "raw_artifact_locally_available": false,
+      "summary_source": "implementation-status.v1 retained before this ledger",
+      "cc_pvdz_selected_column_max_abs_error": 8.811007479181399e-13,
+      "sto3g_diagonal_max_abs_error": 1.7583157152500917e-14,
+      "sto3g_direct_cd_rank": 28,
+      "sto3g_direct_cd_reconstruction_max_abs_error": 1.874889132835733e-14,
+      "performance_eligible": false,
+      "reason": "The diagonal and each pivot traverse all shell quartets."
+    }
+  },
+  "accuracy_tables": {
+    "S": [
+      {
+        "record": "job-62380",
+        "role": "canonical-water8-baseline",
+        "status": "pass-single-sample",
+        "scope": "formal source, topology, convergence, residual, checkpoint, and resource evidence",
+        "target_speed_claim_eligible": false,
+        "reason": "A denominator median requires at least three eligible samples and no candidate result exists."
+      },
+      {
+        "record": "job-62387",
+        "role": "canonical-water4-development-oracle",
+        "status": "pass-single-sample",
+        "target_speed_claim_eligible": false
+      },
+      {
+        "record": "job-62379",
+        "role": "canonical-water2-sanity",
+        "status": "pass",
+        "scope": "source, topology, convergence, and canonical residual only",
+        "target_speed_claim_eligible": false
+      },
+      {
+        "record": "job-62343",
+        "role": "canonical-water8-profile",
+        "status": "profile-only",
+        "reason": "source changed during run",
+        "target_speed_claim_eligible": false
+      }
+    ],
+    "I": [
+      {
+        "record": "job-62326-summary",
+        "role": "water1 direct-CD algebra correctness",
+        "status": "partial",
+        "target_speed_claim_eligible": false
+      }
+    ],
+    "A": [
+      {
+        "record": "job-62321-water1-full-rank-rr",
+        "role": "RR endpoint correctness",
+        "status": "pass-small-case",
+        "target_speed_claim_eligible": false
+      },
+      {
+        "record": "THC-RR",
+        "role": "doubles-amplitude THC diagnostic",
+        "status": "no-completed-mtu-run",
+        "target_speed_claim_eligible": false
+      }
+    ]
+  },
+  "derived_observations": [
+    {
+      "evidence_state": "derived",
+      "statement": "The exact 10x post-HF target is 133.0347 seconds.",
+      "formula": "1330.347 / 10"
+    },
+    {
+      "evidence_state": "local_measured",
+      "statement": "Five exact-node canonical runs have a 1786.21861028485 s median and 0.6786100581998003% sample CV.",
+      "evidence": "results/mtu/g0-exact-node-five-run-summary.json"
+    },
+    {
+      "evidence_state": "derived",
+      "statement": "G1 resident canonical reaches 1.5305x versus the frozen 1330.347 s value and 2.0550x versus the exact-node 1786.219 s median.",
+      "formula": "1330.347/869.2149962764233 and 1786.21861028485/869.2149962764233",
+      "claim_limit": "This is an equation-preserving execution-layer result, not the RR/THC flagship and not a repeated candidate median."
+    },
+    {
+      "evidence_state": "derived",
+      "statement": "Even zero PPL time in the measured G1 profile would leave 248.212 s, above 133.04 s.",
+      "claim_limit": "The zero-PPL figure is a lower-bound diagnostic, not a realizable candidate."
+    }
+  ],
+  "performance_claim": {
+    "eligible": false,
+    "ten_x_achieved": false,
+    "candidate_water8_median_seconds": null,
+    "matched_canonical_water8_median_seconds": 1786.21861028485,
+    "eligible_canonical_water8_sample_count": 5,
+    "eligible_canonical_water8_samples_seconds": [
+      1788.715462628752,
+      1760.8297893963754,
+      1781.3472021687776,
+      1786.21861028485,
+      1790.6130893714726
+    ],
+    "accuracy_qualified_candidate_count": 0,
+    "g1_single_ab_observation_seconds": 869.2149962764233,
+    "reason": "The exact-node canonical denominator is complete. G1 is a single equation-preserving A/B observation; tight-CD RR and THC have no qualified water8 result or interleaved candidate median."
+  },
+  "artifact_inventory": {
+    "path_from_workspace_root": "output/water8-ccsd-implementation-artifacts.sha256",
+    "scope": "All files locally present under benchmarks/cc/a100_water8/results/mtu at the inventory timestamp, plus selected preimplementation output evidence.",
+    "raw_file_count_at_inventory": 51,
+    "raw_total_bytes_at_inventory": 9988436,
+    "selected_preimplementation_output_count": 5,
+    "inventory_entry_count": 56,
+    "remote_only_checkpoints": [
+      {
+        "job_id": "62380",
+        "bytes": 2301270264,
+        "sha256": "b6945564b34bb2f6e9d01b022adbb7e002a2685ae82a20b5c4520670d3621607"
+      },
+      {
+        "job_id": "62387",
+        "bytes": 143856396,
+        "sha256": "dab868a5267d848d0b6329c1ec7af7d1d008b6e0f53f6afa7762759ad7c6bfb8"
+      }
+    ],
+    "remote_only_note": "Remote-only checkpoint hashes are asserted by their completed result JSON files and are not entries in the local SHA-256 inventory."
+  },
+  "update_protocol": {
+    "running_jobs": [],
+    "pending_jobs": [],
+    "on_job_completion": [
+      "Sync raw stdout/stderr, result JSON, checkpoint, topology record, and Slurm accounting.",
+      "Hash every synced file and append it to the artifact inventory.",
+      "Validate source tree, manifest, runtime binaries, read-only state, and topology at start and end.",
+      "Only then change the job evidence state from hypothesis to local_measured.",
+      "Do not compute a median, CV, or speedup until the required matched repetitions exist."
+    ],
+    "next_gate_actions": [
+      "Freeze, build, and publish the reviewed candidate with its exact CUDA 12.8 sm_80 runtime bundle.",
+      "Run snapshot A GINT qualification, issue its receipt, promote snapshot B, and run the release gate.",
+      "Run bounded direct-CD water2 lifecycle smoke, then uncapped water2 correctness.",
+      "Advance to water4 RR/FNO/THC grids only after each preceding gate passes."
+    ]
+  }
+}
