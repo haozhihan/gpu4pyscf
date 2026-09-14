@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Deploy the current worktree as a content-addressed, read-only MTU snapshot.
 set -euo pipefail
+export PYTHONDONTWRITEBYTECODE=1
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
@@ -124,6 +125,7 @@ materialize_local_source() {
   # accepted link before any network transfer begins.
   rsync -a --delete \
     --exclude='.git' --exclude='.pytest_cache/' --exclude='__pycache__/' \
+    --exclude='.ruff_cache/' \
     --exclude='build/' --exclude='dist/' --exclude='results/' \
     --exclude='*.pyc' \
     "${REPOSITORY_ROOT}/" "${destination_source}/"
@@ -189,7 +191,7 @@ start_remote_session() {
 
 remote_ssh() {
   local remote_command
-  remote_command="$(python - "$@" <<'PY'
+  remote_command="$(python - env PYTHONDONTWRITEBYTECODE=1 "$@" <<'PY'
 import shlex
 import sys
 if len(sys.argv) < 2:

@@ -39,6 +39,22 @@ def test_stage_script_is_valid_bash() -> None:
     subprocess.run(["bash", "-n", str(SCRIPT)], check=True)
 
 
+def test_local_and_remote_python_cannot_create_unhashed_bytecode() -> None:
+    stage = _script()
+    deploy = (ROOT / "deploy_mtu_snapshot.sh").read_text(encoding="utf-8")
+    for script in (stage, deploy):
+        assert "export PYTHONDONTWRITEBYTECODE=1" in script
+        assert "--exclude='.ruff_cache/'" in script
+        assert script.index("export PYTHONDONTWRITEBYTECODE=1") < script.index(
+            "materialize_local_source"
+        )
+    assert (
+        'remote_argv_command env PYTHONDONTWRITEBYTECODE=1 "$@"'
+        in stage
+    )
+    assert 'python - env PYTHONDONTWRITEBYTECODE=1 "$@"' in deploy
+
+
 def test_safe_ssh_host_regex_is_bash_32_compatible() -> None:
     regex = "^[A-Za-z0-9_.:@%+-]+$"
     assert regex in _script()
@@ -129,6 +145,7 @@ def test_copy_exclusions_match_snapshot_deploy_contract() -> None:
         "--exclude='.git'",
         "--exclude='.pytest_cache/'",
         "--exclude='__pycache__/'",
+        "--exclude='.ruff_cache/'",
         "--exclude='build/'",
         "--exclude='dist/'",
         "--exclude='results/'",

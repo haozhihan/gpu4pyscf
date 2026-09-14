@@ -6,6 +6,7 @@
 # post-receive callback.  A successful run leaves the allocated build-input
 # container in place for a later build job.
 set -euo pipefail
+export PYTHONDONTWRITEBYTECODE=1
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
@@ -110,7 +111,7 @@ PY
 
 remote_ssh() {
   local remote_command
-  remote_command="$(remote_argv_command "$@")"
+  remote_command="$(remote_argv_command env PYTHONDONTWRITEBYTECODE=1 "$@")"
   # OpenSSH passes the remote command through the login shell.  Supplying one
   # shlex-quoted command string preserves the exact argv even when a configured
   # remote path contains whitespace or shell metacharacters.
@@ -418,6 +419,7 @@ materialize_local_source() {
   mkdir -p "${destination_source}"
   rsync -a --delete \
     --exclude='.git' --exclude='.pytest_cache/' --exclude='__pycache__/' \
+    --exclude='.ruff_cache/' \
     --exclude='build/' --exclude='dist/' --exclude='results/' \
     --exclude='*.pyc' \
     "${REPOSITORY_ROOT}/" "${destination_source}/"
