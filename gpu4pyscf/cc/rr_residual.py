@@ -1535,6 +1535,182 @@ def projected_cc_woooo(
     )
 
 
+def estimate_projected_cc_wvvvv_workspace_nbytes(
+    nocc: int,
+    nvir: int,
+    rank: int,
+    naux: int,
+    *,
+    auxiliary_block_size: int,
+    itemsize: int = 8,
+) -> dict[str, Any]:
+    """Return the logical workspace policy for fused ``Wvvvv`` ladders.
+
+    A fused bilinear ladder has two transformed matrices live together.  Each
+    requested auxiliary block is therefore processed in sub-blocks no wider
+    than half of that *actual* outer block.  Their two rank-square transforms
+    fit within the old path's one-transform allowance for the outer block,
+    including a short tail.  A singleton outer block uses the sequential
+    two-ladder path because no positive fused sub-block can meet that bound.
+
+    The aggregate ledger covers Python-visible logical arrays owned by the
+    kernel.  Backend library workspaces and caller-owned input tensors are
+    outside its scope.
+    """
+
+    nocc = int(nocc)
+    nvir = int(nvir)
+    rank = int(rank)
+    naux = int(naux)
+    block_size = int(auxiliary_block_size)
+    itemsize = int(itemsize)
+    if nocc < 1 or nvir < 1 or rank < 1 or itemsize < 1:
+        raise ValueError("Wvvvv workspace dimensions must be positive")
+    if naux < 0:
+        raise ValueError("Wvvvv naux must be non-negative")
+    if block_size < 1:
+        raise ValueError("auxiliary_block_size must be positive")
+
+    outer_widths = [
+        min(block_size, naux - start)
+        for start in range(0, naux, block_size)
+    ]
+    maximum_outer_width = max(outer_widths, default=0)
+    fused_inner_widths = [
+        width // 2 for width in outer_widths if width >= 2
+    ]
+    maximum_fused_inner_width = max(fused_inner_widths, default=0)
+    singleton_count = sum(width == 1 for width in outer_widths)
+    fused_subblock_count = sum(
+        (width + width // 2 - 1) // (width // 2)
+        for width in outer_widths
+        if width >= 2
+    )
+
+    rank2 = rank * rank * itemsize
+    projector = nocc * nvir * rank * itemsize
+    fused_width = maximum_fused_inner_width
+    fused_temporaries = {
+        "right_factor_nbytes": int(fused_width * nvir * nvir * itemsize),
+        "two_live_rank_square_transforms_nbytes": int(
+            2 * fused_width * rank2
+        ),
+        "two_live_singles_transforms_nbytes": int(
+            2 * fused_width * rank * itemsize
+        ),
+        "projected_contraction_return_nbytes": int(
+            rank2 if fused_width else 0
+        ),
+    }
+    sequential_temporaries = {
+        "correction_factor_nbytes": int(
+            nvir * nvir * itemsize if singleton_count else 0
+        ),
+        "transformed_factor_nbytes": int(
+            nvir * nvir * itemsize if singleton_count else 0
+        ),
+        "one_live_rank_square_transform_nbytes": int(
+            rank2 if singleton_count else 0
+        ),
+        "one_live_singles_transform_nbytes": int(
+            rank * itemsize if singleton_count else 0
+        ),
+        "ladder_core_nbytes": int(rank2 if singleton_count else 0),
+        "projected_contraction_return_nbytes": int(
+            rank2 if singleton_count else 0
+        ),
+    }
+    final_symmetrization_temporaries = {
+        "projected_core_return_nbytes": int(rank2),
+    }
+    persistent = {
+        "projected_core_nbytes": int(rank2),
+        "symmetric_core_nbytes": int(
+            rank2 if maximum_fused_inner_width else 0
+        ),
+    }
+    fused_temporary_sum = sum(fused_temporaries.values())
+    sequential_temporary_sum = sum(sequential_temporaries.values())
+    final_symmetrization_temporary_sum = sum(
+        final_symmetrization_temporaries.values()
+    )
+    temporary_sum = max(
+        fused_temporary_sum,
+        sequential_temporary_sum,
+        final_symmetrization_temporary_sum,
+    )
+    persistent_sum = sum(persistent.values())
+    prior_peak = maximum_outer_width * rank2
+    two_live_peak = 2 * maximum_fused_inner_width * rank2
+    sequential_peak = rank2 if singleton_count else 0
+    maximum_transform_peak = max(two_live_peak, sequential_peak)
+    fused_individual_arrays = [
+        fused_temporaries["right_factor_nbytes"],
+        fused_width * rank2,
+        fused_width * rank * itemsize,
+        fused_temporaries["projected_contraction_return_nbytes"],
+    ]
+    sequential_individual_arrays = [
+        *sequential_temporaries.values(),
+    ]
+    all_workspace_arrays = [
+        *persistent.values(),
+        *fused_individual_arrays,
+        *sequential_individual_arrays,
+        *final_symmetrization_temporaries.values(),
+    ]
+    return {
+        "scope": (
+            "kernel-owned-logical-arrays-excludes-inputs-and-backend-workspace"
+        ),
+        "requested_auxiliary_block_size": int(block_size),
+        "maximum_actual_outer_block_size": int(maximum_outer_width),
+        "maximum_fused_auxiliary_subblock_size": int(
+            maximum_fused_inner_width
+        ),
+        "fused_auxiliary_subblock_count": int(fused_subblock_count),
+        "singleton_sequential_block_count": int(singleton_count),
+        "singleton_policy": "sequential-two-ladder",
+        "rank_square_transform_nbytes_per_auxiliary": int(rank2),
+        "prior_one_transform_outer_block_nbytes": int(prior_peak),
+        "maximum_simultaneously_live_rank_square_transform_nbytes": int(
+            maximum_transform_peak
+        ),
+        "rank_square_transform_contract_satisfied": bool(
+            maximum_transform_peak <= prior_peak
+        ),
+        "per_outer_block_contract_satisfied": bool(all(
+            (
+                width == 1
+                or 2 * (width // 2) <= width
+            )
+            for width in outer_widths
+        )),
+        "projector_view_nbytes_not_in_workspace_sum": int(projector),
+        "persistent": persistent,
+        "persistent_sum_nbytes": int(persistent_sum),
+        "temporaries": {
+            "fused_bilinear": fused_temporaries,
+            "singleton_sequential": sequential_temporaries,
+            "final_symmetrization": final_symmetrization_temporaries,
+        },
+        "fused_temporary_sum_nbytes": int(fused_temporary_sum),
+        "sequential_temporary_sum_nbytes": int(
+            sequential_temporary_sum
+        ),
+        "final_symmetrization_temporary_sum_nbytes": int(
+            final_symmetrization_temporary_sum
+        ),
+        "temporary_sum_nbytes": int(temporary_sum),
+        "largest_logical_workspace_array_nbytes": int(
+            max(all_workspace_arrays, default=0)
+        ),
+        "simultaneously_live_shape_upper_bound_nbytes": int(
+            persistent_sum + temporary_sum
+        ),
+    }
+
+
 def projected_cc_wvvvv(
     doubles: RRDoubles,
     t1: Any,
@@ -1551,9 +1727,19 @@ def projected_cc_wvvvv(
     ``W[a,b,c,d] = (Lvv-M)[A,a,c] (Lvv-M)[A,b,d]``
     ``               - M[A,a,c] M[A,b,d]``.
 
-    Both ladders are accumulated a Cholesky block at a time.  This avoids the
-    dense ``vvvv`` tensor and does not retain the two ``(naux,nvir,nvir)``
-    transformed-factor copies.
+    The difference of the two symmetric ladders is evaluated as one bilinear
+    ladder.  If ``X`` and ``Y`` denote the RR transforms of ``Lvv`` and ``M``,
+    respectively, then
+
+    ``sym(ladder(X-Y) - ladder(Y))``
+    ``    = sym(X @ sym(core) @ (X-2Y).T)``.
+
+    The same identity applies to the singles outer product.  Each requested
+    Cholesky block is internally capped at half its actual width, so the two
+    live rank-square transforms do not exceed the prior path's one-transform
+    block allowance.  A singleton block falls back to the sequential identity.
+    This avoids the dense ``vvvv`` tensor and removes one core-weighted ladder
+    contraction for every fused sub-block.
     """
 
     vectors = doubles.projector.vectors
@@ -1577,44 +1763,125 @@ def projected_cc_wvvvv(
     if block_size < 1:
         raise ValueError("auxiliary_block_size must be positive")
     xp = _array_module(vectors)
-    projected = xp.zeros((rank, rank), dtype=xp.result_type(*(
+    dtype = xp.result_type(*(
         vectors, core, t1, lov, lvv
-    )))
-    largest = 0
-    for start in range(0, naux, block_size):
-        stop = min(start + block_size, naux)
-        ov = lov[start:stop]
-        vv = lvv[start:stop]
-        singles_transform = xp.einsum("Akc,ka->Aac", ov, t1)
-        transformed = vv - singles_transform
-        transformed_ladder = _projected_symmetric_ladder(
-            doubles,
-            t1,
-            transformed,
-            sector="virtual",
-            auxiliary_block_size=int(stop - start),
-        )
-        correction_ladder = _projected_symmetric_ladder(
-            doubles,
-            t1,
-            singles_transform,
-            sector="virtual",
-            auxiliary_block_size=int(stop - start),
-        )
-        projected += transformed_ladder.core - correction_ladder.core
-        largest = max(
-            largest,
-            int(singles_transform.nbytes),
-            int(transformed.nbytes),
-            int(transformed_ladder.largest_intermediate_nbytes),
-            int(correction_ladder.largest_intermediate_nbytes),
-        )
-    projected = (projected + projected.T) * 0.5
+    ))
+    projected = xp.zeros((rank, rank), dtype=dtype)
+    workspace = estimate_projected_cc_wvvvv_workspace_nbytes(
+        nocc,
+        nvir,
+        rank,
+        naux,
+        auxiliary_block_size=block_size,
+        itemsize=int(dtype.itemsize),
+    )
+    has_fused_blocks = bool(
+        workspace["maximum_fused_auxiliary_subblock_size"]
+    )
+    if has_fused_blocks:
+        symmetric_core = core + core.T
+        symmetric_core *= 0.5
+    else:
+        symmetric_core = None
+    u = vectors.reshape(nocc, nvir, rank)
+    largest = 0 if symmetric_core is None else int(symmetric_core.nbytes)
+    for outer_start in range(0, naux, block_size):
+        outer_stop = min(outer_start + block_size, naux)
+        outer_width = outer_stop - outer_start
+        if outer_width == 1:
+            ov = lov[outer_start:outer_stop]
+            vv = lvv[outer_start:outer_stop]
+            correction = xp.einsum("Akc,ka->Aac", ov, t1)
+            transformed = vv - correction
+            transformed_ladder = _projected_symmetric_ladder(
+                doubles,
+                t1,
+                transformed,
+                sector="virtual",
+                auxiliary_block_size=1,
+            )
+            projected += transformed_ladder.core
+            largest = max(
+                largest,
+                int(correction.nbytes),
+                int(transformed.nbytes),
+                int(transformed_ladder.core.nbytes),
+                int(transformed_ladder.largest_intermediate_nbytes),
+            )
+            del transformed, transformed_ladder
+            correction_ladder = _projected_symmetric_ladder(
+                doubles,
+                t1,
+                correction,
+                sector="virtual",
+                auxiliary_block_size=1,
+            )
+            projected -= correction_ladder.core
+            largest = max(
+                largest,
+                int(correction_ladder.core.nbytes),
+                int(correction_ladder.largest_intermediate_nbytes),
+            )
+            del correction, correction_ladder
+            continue
+
+        inner_block_size = outer_width // 2
+        for start in range(outer_start, outer_stop, inner_block_size):
+            stop = min(start + inner_block_size, outer_stop)
+            ov = lov[start:stop]
+            vv = lvv[start:stop]
+            right_factors = xp.einsum("Akc,ka->Aac", ov, t1)
+            right_factors *= -2.0
+            right_factors += vv
+
+            left_matrix = xp.einsum("iaP,Aac,icR->APR", u, vv, u)
+            left_singles = xp.einsum("iaP,Aac,ic->AP", u, vv, t1)
+            weighted_left = xp.einsum(
+                "APR,RS->APS", left_matrix, symmetric_core
+            )
+            largest = max(
+                largest,
+                int(right_factors.nbytes),
+                int(left_matrix.nbytes),
+                int(left_singles.nbytes),
+                int(weighted_left.nbytes),
+            )
+            # The weighted left transform is all that the remaining
+            # contraction needs.  Release the unweighted matrix before
+            # allocating its right counterpart.
+            del left_matrix
+            right_matrix = xp.einsum(
+                "iaP,Aac,icR->APR", u, right_factors, u
+            )
+            right_singles = xp.einsum(
+                "iaP,Aac,ic->AP", u, right_factors, t1
+            )
+            projected += xp.einsum(
+                "APS,AQS->PQ", weighted_left, right_matrix
+            )
+            projected += xp.einsum(
+                "AP,AQ->PQ", left_singles, right_singles
+            )
+            largest = max(
+                largest,
+                int(right_matrix.nbytes),
+                int(right_singles.nbytes),
+            )
+            del (
+                left_singles,
+                right_factors,
+                right_matrix,
+                right_singles,
+                weighted_left,
+            )
+    projected = projected + projected.T
+    projected *= 0.5
     return RRResidualTermResult(
         core=projected,
         term="complete-cc-Wvvvv-ladder",
         auxiliary_block_size=block_size,
         largest_intermediate_nbytes=largest,
+        workspace_shape_upper_bound=workspace,
     )
 
 
@@ -2923,6 +3190,7 @@ __all__ = [
     "projected_cc_wvvvv",
     "projected_cc_ring",
     "projected_cc_ring_gemm",
+    "estimate_projected_cc_wvvvv_workspace_nbytes",
     "estimate_rr_ring_workspace_nbytes",
     "singles_from_fov_doubles",
     "singles_from_ovoo_doubles",

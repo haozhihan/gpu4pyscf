@@ -15,6 +15,7 @@ from gpu4pyscf.cc.rr_residual import (
     build_projected_ccsd_doubles_numerator,
     build_ccsd_singles_numerator,
     build_cc_fock_intermediates,
+    estimate_projected_cc_wvvvv_workspace_nbytes,
     projected_bare_ovov,
     projected_cc_woooo,
     projected_cc_ring,
@@ -907,6 +908,268 @@ def test_projected_complete_cc_wvvvv_matches_dense_reference():
     np.testing.assert_allclose(observed.core, expected, atol=8e-11)
     assert observed.term == "complete-cc-Wvvvv-ladder"
     assert observed.materialized_dense_t2 is False
+
+
+def _two_ladder_cc_wvvvv_reference(
+    doubles, t1, lov, lvv, *, auxiliary_block_size
+):
+    """Pre-fusion implementation retained as a focused numerical oracle."""
+
+    xp = rr_residual_module._array_module(doubles.core)
+    projected = xp.zeros_like(doubles.core)
+    naux = int(lov.shape[0])
+    for start in range(0, naux, auxiliary_block_size):
+        stop = min(start + auxiliary_block_size, naux)
+        correction = xp.einsum(
+            "Akc,ka->Aac", lov[start:stop], t1
+        )
+        transformed = lvv[start:stop] - correction
+        first = rr_residual_module._projected_symmetric_ladder(
+            doubles,
+            t1,
+            transformed,
+            sector="virtual",
+            auxiliary_block_size=stop - start,
+        )
+        second = rr_residual_module._projected_symmetric_ladder(
+            doubles,
+            t1,
+            correction,
+            sector="virtual",
+            auxiliary_block_size=stop - start,
+        )
+        projected += first.core - second.core
+    return (projected + projected.T) * 0.5
+
+
+@pytest.mark.parametrize(
+    ("nocc", "nvir", "naux", "rank", "block_size"),
+    [(2, 3, 5, 4, 2), (3, 4, 4, 5, 3), (2, 3, 3, 4, 1)],
+)
+def test_fused_cc_wvvvv_matches_two_ladder_fp64_reference(
+    nocc, nvir, naux, rank, block_size
+):
+    rng = np.random.default_rng(8100 + nocc + 10 * nvir)
+    vectors, _ = np.linalg.qr(rng.normal(size=(nocc * nvir, rank)))
+    # Deliberately retain an asymmetric component: each old symmetric ladder
+    # observes only sym(core), and the fused identity must preserve that.
+    core = rng.normal(size=(rank, rank))
+    doubles = RRDoubles(
+        RRProjector(vectors, -np.ones(rank), 0.0, nocc * nvir),
+        core,
+        nocc,
+        nvir,
+    )
+    t1 = rng.normal(size=(nocc, nvir))
+    lov = rng.normal(size=(naux, nocc, nvir))
+    lvv = rng.normal(size=(naux, nvir, nvir))
+
+    expected = _two_ladder_cc_wvvvv_reference(
+        doubles,
+        t1,
+        lov,
+        lvv,
+        auxiliary_block_size=block_size,
+    )
+    observed = projected_cc_wvvvv(
+        doubles,
+        t1,
+        lov,
+        lvv,
+        auxiliary_block_size=block_size,
+    )
+
+    np.testing.assert_allclose(
+        observed.core, expected, atol=3e-11, rtol=3e-12
+    )
+    assert observed.term == "complete-cc-Wvvvv-ladder"
+    assert observed.auxiliary_block_size == block_size
+    assert observed.kernel_name == "rr-factorized-reference"
+    assert observed.materialized_dense_t2 is False
+    assert observed.largest_intermediate_nbytes >= core.nbytes
+
+
+def test_fused_cc_wvvvv_uses_bounded_subblocks_and_singleton_fallback(
+    monkeypatch,
+):
+    rng = np.random.default_rng(8142)
+    nocc, nvir, naux, rank, block_size = 2, 3, 5, 4, 2
+    vectors, _ = np.linalg.qr(rng.normal(size=(nocc * nvir, rank)))
+    doubles = RRDoubles(
+        RRProjector(vectors, -np.ones(rank), 0.0, nocc * nvir),
+        rng.normal(size=(rank, rank)),
+        nocc,
+        nvir,
+    )
+    t1 = rng.normal(size=(nocc, nvir))
+    lov = rng.normal(size=(naux, nocc, nvir))
+    lvv = rng.normal(size=(naux, nvir, nvir))
+    calls = []
+    original_einsum = np.einsum
+
+    def counted_einsum(expression, *operands, **kwargs):
+        calls.append(expression)
+        return original_einsum(expression, *operands, **kwargs)
+
+    monkeypatch.setattr(rr_residual_module.np, "einsum", counted_einsum)
+    projected_cc_wvvvv(
+        doubles,
+        t1,
+        lov,
+        lvv,
+        auxiliary_block_size=block_size,
+    )
+
+    workspace = estimate_projected_cc_wvvvv_workspace_nbytes(
+        nocc,
+        nvir,
+        rank,
+        naux,
+        auxiliary_block_size=block_size,
+    )
+    fused_blocks = workspace["fused_auxiliary_subblock_count"]
+    singleton_blocks = workspace["singleton_sequential_block_count"]
+    assert calls.count("APR,RS,AQS->PQ") == 2 * singleton_blocks
+    assert calls.count("APR,RS->APS") == fused_blocks
+    assert calls.count("APS,AQS->PQ") == fused_blocks
+    assert calls.count("AP,AQ->PQ") == fused_blocks + 2 * singleton_blocks
+
+
+@pytest.mark.parametrize(
+    ("naux", "block_size", "maximum_outer", "maximum_inner", "singletons"),
+    [
+        (8, 4, 4, 2, 0),
+        (7, 4, 4, 2, 0),
+        (5, 4, 4, 2, 1),
+        (5, 1, 1, 0, 5),
+        (8, 3, 3, 1, 0),
+        (3, 8, 3, 1, 0),
+    ],
+)
+def test_cc_wvvvv_workspace_caps_two_live_transforms_for_full_and_tail_blocks(
+    naux, block_size, maximum_outer, maximum_inner, singletons
+):
+    nocc, nvir, rank, itemsize = 3, 7, 11, 8
+    workspace = estimate_projected_cc_wvvvv_workspace_nbytes(
+        nocc,
+        nvir,
+        rank,
+        naux,
+        auxiliary_block_size=block_size,
+        itemsize=itemsize,
+    )
+    rank2 = rank * rank * itemsize
+
+    assert workspace["maximum_actual_outer_block_size"] == maximum_outer
+    assert (
+        workspace["maximum_fused_auxiliary_subblock_size"]
+        == maximum_inner
+    )
+    assert workspace["singleton_sequential_block_count"] == singletons
+    assert workspace["rank_square_transform_contract_satisfied"] is True
+    assert workspace["per_outer_block_contract_satisfied"] is True
+    assert (
+        workspace[
+            "maximum_simultaneously_live_rank_square_transform_nbytes"
+        ]
+        <= workspace["prior_one_transform_outer_block_nbytes"]
+    )
+    assert workspace["prior_one_transform_outer_block_nbytes"] == (
+        maximum_outer * rank2
+    )
+    expected_live = max(
+        2 * maximum_inner * rank2,
+        rank2 if singletons else 0,
+    )
+    assert workspace[
+        "maximum_simultaneously_live_rank_square_transform_nbytes"
+    ] == expected_live
+    assert workspace["simultaneously_live_shape_upper_bound_nbytes"] == (
+        workspace["persistent_sum_nbytes"]
+        + workspace["temporary_sum_nbytes"]
+    )
+
+
+def test_cc_wvvvv_result_reports_tail_workspace_policy():
+    rng = np.random.default_rng(8171)
+    nocc, nvir, naux, rank, block_size = 2, 4, 5, 5, 4
+    vectors, _ = np.linalg.qr(rng.normal(size=(nocc * nvir, rank)))
+    doubles = RRDoubles(
+        RRProjector(vectors, -np.ones(rank), 0.0, nocc * nvir),
+        rng.normal(size=(rank, rank)),
+        nocc,
+        nvir,
+    )
+    result = projected_cc_wvvvv(
+        doubles,
+        rng.normal(size=(nocc, nvir)),
+        rng.normal(size=(naux, nocc, nvir)),
+        rng.normal(size=(naux, nvir, nvir)),
+        auxiliary_block_size=block_size,
+    )
+    workspace = result.metadata()["workspace_shape_upper_bound"]
+
+    assert result.auxiliary_block_size == block_size
+    assert workspace["maximum_actual_outer_block_size"] == 4
+    assert workspace["maximum_fused_auxiliary_subblock_size"] == 2
+    assert workspace["singleton_sequential_block_count"] == 1
+    assert workspace["singleton_policy"] == "sequential-two-ladder"
+    assert workspace["rank_square_transform_contract_satisfied"] is True
+    assert result.largest_intermediate_nbytes <= workspace[
+        "largest_logical_workspace_array_nbytes"
+    ]
+
+
+def test_gpu_fused_cc_wvvvv_matches_two_ladder_fp64_reference():
+    cp = pytest.importorskip("cupy")
+    try:
+        if cp.cuda.runtime.getDeviceCount() < 1:
+            pytest.skip("no CUDA device")
+    except Exception as exc:
+        pytest.skip(f"CUDA runtime unavailable: {exc}")
+
+    rng = np.random.default_rng(8188)
+    nocc, nvir, naux, rank, block_size = 2, 4, 5, 5, 2
+    vectors, _ = np.linalg.qr(rng.normal(size=(nocc * nvir, rank)))
+    core = rng.normal(size=(rank, rank))
+    t1 = rng.normal(size=(nocc, nvir))
+    lov = rng.normal(size=(naux, nocc, nvir))
+    lvv = rng.normal(size=(naux, nvir, nvir))
+    cpu_doubles = RRDoubles(
+        RRProjector(vectors, -np.ones(rank), 0.0, nocc * nvir),
+        core,
+        nocc,
+        nvir,
+    )
+    expected = _two_ladder_cc_wvvvv_reference(
+        cpu_doubles,
+        t1,
+        lov,
+        lvv,
+        auxiliary_block_size=block_size,
+    )
+    gpu_doubles = RRDoubles(
+        RRProjector(
+            cp.asarray(vectors),
+            cp.asarray(-np.ones(rank)),
+            0.0,
+            nocc * nvir,
+        ),
+        cp.asarray(core),
+        nocc,
+        nvir,
+    )
+    observed = projected_cc_wvvvv(
+        gpu_doubles,
+        cp.asarray(t1),
+        cp.asarray(lov),
+        cp.asarray(lvv),
+        auxiliary_block_size=block_size,
+    )
+
+    cp.testing.assert_allclose(
+        observed.core, cp.asarray(expected), atol=3e-11, rtol=3e-12
+    )
 
 
 def test_projected_complete_cc_ring_matches_dense_reference():
