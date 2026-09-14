@@ -516,6 +516,11 @@ class FNOCCSD:
                 self.fno_mf, frozen=self.metadata.frozen_virtual.tolist(), **self.cc_kwargs
             )
         # Keep audit metadata attached to the solver users receive.
+        # PySCF StreamObject warns when a public attribute is not declared in
+        # ``_keys``.  Give this solver its own copied key set so attaching FNO
+        # provenance is both quiet and does not mutate the backend class.
+        audit_keys = {"fno_metadata", "fno_delta_mp2", "fno_backend"}
+        self._cc._keys = set(getattr(self._cc, "_keys", ())) | audit_keys
         self._cc.fno_metadata = self.metadata
         self._cc.fno_delta_mp2 = self.metadata.delta_mp2
         self._cc.fno_backend = self.backend
