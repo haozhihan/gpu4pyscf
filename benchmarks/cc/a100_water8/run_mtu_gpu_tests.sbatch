@@ -90,7 +90,11 @@ rrccsd_tests=(gpu4pyscf/cc/tests/test_rrccsd*.py)
   gpu4pyscf/cc/tests/test_thc_engine.py \
   gpu4pyscf/cc/tests/test_thc_eri.py \
   gpu4pyscf/cc/tests/test_thc_eri_factorization.py \
+  gpu4pyscf/cc/tests/test_thc_eri_preprocess.py \
   gpu4pyscf/cc/tests/test_thc_factorization.py \
+  gpu4pyscf/cc/tests/test_thc_mp2_weights.py \
+  gpu4pyscf/cc/tests/test_thc_omega_d.py \
+  gpu4pyscf/cc/tests/test_thc_omega_ghi.py \
   gpu4pyscf/cc/tests/test_thc_residual.py \
   gpu4pyscf/cc/tests/test_thc_rrccsd_cd.py \
   gpu4pyscf/cc/tests/test_addons.py \
