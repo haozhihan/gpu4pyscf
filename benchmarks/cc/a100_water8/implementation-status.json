@@ -1,6 +1,6 @@
 {
   "schema": "gpu4pyscf.water8.implementation-status.v2",
-  "as_of_utc": "2026-09-14T11:11:28.211321+00:00",
+  "as_of_utc": "2026-09-14T11:42:13+00:00",
   "purpose": "Candid implementation and MTU evidence ledger for the fixed WATER27 H2O8d2d single-A100 CCSD project.",
   "claim_policy": {
     "ten_x_claim_allowed": false,
@@ -18,9 +18,9 @@
     "frozen_baseline_commit": "a89b3ae018d4e82968323ef95645d91adde294aa",
     "feature_worktree": "analysis/research/ccsd/gpu4pyscf-a100-thc-rr",
     "g0_worktree": "analysis/research/ccsd/gpu4pyscf-g0-baseline",
-    "feature_source_state": "a2-published-qualification-queued-post-a2-provenance-audit-development",
+    "feature_source_state": "a2-published-qualification-queued-post-a2-direct-thc-audit-development",
     "feature_performance_eligible": false,
-    "feature_head_before_ledger_update": "2e034299393b3c072a494765c8560700495e0532",
+    "feature_head_before_ledger_update": "e6799eabc03f64fc4a4fde17ad01921265602d36",
     "merged_implementation_commits": {
       "fused_r123": "29ceab6",
       "fixed_gpu_test_node": "56291e7",
@@ -33,7 +33,9 @@
       "algorithm_1_3_provenance": "77d0c71",
       "audit_opt_in_zero_overhead": "739831a",
       "algebraic_r123_audit_ledger": "b700f99",
-      "coarse_ledger_truthfulness_fix": "2e03429"
+      "coarse_ledger_truthfulness_fix": "2e03429",
+      "eri_thc_algorithms_4_5": "9caf1dd",
+      "weighted_eri_thc_factorization": "e6799ea"
     }
   },
   "contract": {
@@ -167,12 +169,12 @@
     },
     {
       "id": "feature-candidate-unfrozen",
-      "source_state": "reviewed-committed-post-a2-provenance-development",
+      "source_state": "reviewed-committed-post-a2-direct-thc-audit-development",
       "formal_source_eligible": false,
       "formal_performance_eligible": false,
       "use": "A3 development lineage; never substitute for the frozen A2 job source",
       "missing": "new immutable snapshot and MTU GPU validation after a production-relevant change is selected",
-      "head_before_ledger_update": "2e034299393b3c072a494765c8560700495e0532",
+      "head_before_ledger_update": "e6799eabc03f64fc4a4fde17ad01921265602d36",
       "superseded_by": "candidate-snapshot-a2-4c23ed1b-for-current-queued-evidence-only"
     },
     {
@@ -408,8 +410,8 @@
       "id": "G5",
       "name": "doubles-amplitude-thc-rr-ccsd",
       "evidence_state": "local_measured",
-      "state": "fused-r123-stream-plus-opt-in-provenance-audit-inexact-fail-closed",
-      "decision": "retain-safe-hybrid-identity-and-derive-fine-grained-paper-equation-partition",
+      "state": "direct-algorithms-4-5-and-eri-factorization-audit-only-inexact-fail-closed",
+      "decision": "retain-safe-hybrid-identity-and-build-the-paper-direct-complement-under-term-level-oracles",
       "method_class": "controlled-approximation",
       "acceptance_table": "A",
       "implemented": [
@@ -427,7 +429,13 @@
         "Algorithm 1 and Algorithm 3 expose opt-in L/T1 provenance subcores for arbitrary pair factors.",
         "An opt-in algebraic R123 ledger separates Algorithm 1 occupied/virtual quadratics from the remaining cross-plus-Algorithms-2/3 bucket without claiming PySCF coarse-diagram attribution.",
         "The production fused path performs no provenance contractions and truthfully reports audit data unavailable.",
-        "A zero-t1/zero-core test proves Algorithm 2 retains the bare-ovov driver, preventing an invalid whole-ring attribution."
+        "A zero-t1/zero-core test proves Algorithm 2 retains the bare-ovov driver, preventing an invalid whole-ring attribution.",
+        "Audit-only ERI-THC factors implement Eq. 17 for the occupied-virtual ERI class without dense t2 or four-index ERI materialization.",
+        "Audit-only paper Algorithms 4 and 5 evaluate the raw projected Eq. 32 Omega-A and Eq. 33 Omega-C contributions with independent dense contraction oracles.",
+        "Weighted Cholesky CP/ALS implements paper Eqs. 19-21, forms Z = xi.T @ xi, records realized rank and weighted/unweighted residuals, and retains an analytic exact-pair endpoint.",
+        "The ERI-THC fit validates one backend, dtype, and CuPy device; GPU scalar reads and initial-factor H2D copies require an explicit transfer counter.",
+        "Fit residual evaluation is auxiliary-blocked and records its largest logical intermediate; actual GPU peak memory still requires profiler evidence.",
+        "The Algorithms 4-10 algebraic boundary and staged promotion rules are fixed in thc-direct-complement.md."
       ],
       "local_verification": {
         "shared_decomposition_focused": {
@@ -437,8 +445,8 @@
         },
         "independent_review": "no-P0-P1-P2",
         "combined_cpu_suite": {
-          "passed": 781,
-          "skipped_environment": 38,
+          "passed": 812,
+          "skipped_environment": 43,
           "failed": 0
         },
         "mtu_cuda_numerical_gate_completed": false,
@@ -452,19 +460,35 @@
           "skipped_environment": 3,
           "failed": 0
         },
-        "r123_provenance_independent_review": "no-P0-P1-P2-after-two-correction-rounds"
+        "r123_provenance_independent_review": "no-P0-P1-P2-after-two-correction-rounds",
+        "eri_thc_algorithms_4_5_focused": {
+          "passed": 16,
+          "skipped_environment": 3,
+          "failed": 0
+        },
+        "eri_thc_factorization_focused": {
+          "passed": 15,
+          "skipped_environment": 2,
+          "failed": 0
+        },
+        "eri_thc_algorithms_4_5_independent_review": "no-P0-P1-P2",
+        "eri_thc_factorization_independent_review": "no-P0-P1-P2-after-one-correction-round"
       },
       "limitations": [
         "The coordinate transforms/stream are shared, but exact Algorithms 1-3 are still evaluated as the subtraction oracle in addition to the six exact RR component kernels.",
         "The algebraic provenance buckets do not identify a complete production Woooo/Wvvvv/ring partition; Algorithm 2 contains a core-independent bare-ovov contribution.",
         "Only Algorithms 1-3 are replacement candidates; the safe complement remains the exact RR equation until a finer equation-level partition is independently proven.",
-        "No inexact THC production substitution is accepted until water2 and water4 residual/accuracy gates pass."
+        "No inexact THC production substitution is accepted until water2 and water4 residual/accuracy gates pass.",
+        "Algorithms 4 and 5 currently return raw amplitude-THC coordinate contributions; coefficients, permutations, symmetry assembly, RR back-projection, and Algorithms 6-10 are not yet implemented.",
+        "The ERI-THC factorizer accepts explicit orbital weights, but production MP2 natural-occupation weight derivation and orbital rotation are not yet connected.",
+        "Algorithm 4/5 and ERI-THC GPU correctness, fit time, and actual peak memory remain pending on the fixed A100 node."
       ],
       "missing": [
         "A100 fused full-pair endpoint validation from the frozen A2 snapshot.",
-        "Fine-grained paper-equation attribution that removes exact R123 work from the production component kernels without coarse-group double counting.",
+        "Paper Algorithms 6-10 plus coefficient, permutation, symmetry, and RR-coordinate composition against the safe complete-RR oracle.",
+        "Production MP2 natural-occupation weights and occupied/virtual rotation of the direct-CD factors.",
         "Term-by-term inexact water2/water4 comparison.",
-        "Counterpoise records with realized THC rank and replacement status.",
+        "Counterpoise records with realized amplitude-THC and ERI-THC ranks and replacement status.",
         "THC fit-inclusive qualified water8 timing and error."
       ]
     },
@@ -487,8 +511,8 @@
   "verification_summary": {
     "evidence_state": "local_measured",
     "combined_cpu_suite": {
-      "passed": 781,
-      "skipped_environment": 38,
+      "passed": 812,
+      "skipped_environment": 43,
       "failed": 0,
       "excluded_upstream_test": "gpu4pyscf/cc/tests/test_ccsd.py requires an installed local pyscf"
     },
@@ -504,7 +528,9 @@
     "a2_runtime_build_and_snapshot_validation": "passed",
     "a2_postqualification_orchestrator_review": "no-P0-P1-P2",
     "r123_provenance_review": "no-P0-P1-P2-after-two-correction-rounds",
-    "r123_provenance_default_path": "opt-in-audit-default-zero-overhead"
+    "r123_provenance_default_path": "opt-in-audit-default-zero-overhead",
+    "eri_thc_algorithms_4_5_review": "no-P0-P1-P2",
+    "eri_thc_factorization_review": "no-P0-P1-P2-after-one-correction-round"
   },
   "mtu_job_ledger": [
     {
@@ -1168,7 +1194,7 @@
       {
         "record": "THC-RR",
         "role": "doubles-amplitude THC diagnostic",
-        "status": "no-completed-mtu-run",
+        "status": "local-audit-kernels-no-completed-mtu-run",
         "target_speed_claim_eligible": false
       }
     ]

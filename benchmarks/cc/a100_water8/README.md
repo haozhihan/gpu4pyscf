@@ -124,6 +124,9 @@ The driver supports seven explicit method labels:
 * `rr_canonical`: RRCCSD using the dense canonical residual for validation.
 * `thc_canonical`: the dense two-level THC validation surrogate.
 
+The paper-equation boundary and staged Algorithms 4--10 acceptance rules are
+recorded in [thc-direct-complement.md](thc-direct-complement.md).
+
 Every reduced-rank or THC record states its validation status and remains
 performance-ineligible until the corresponding numerical, allocation, and
 A100 timing gates pass.  `--rr-ring-kernel reference|gemm` selects the RR ring

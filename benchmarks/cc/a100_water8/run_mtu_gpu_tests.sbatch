@@ -88,6 +88,8 @@ rrccsd_tests=(gpu4pyscf/cc/tests/test_rrccsd*.py)
   gpu4pyscf/cc/tests/test_rr_engine.py \
   gpu4pyscf/cc/tests/test_full_space_residual.py \
   gpu4pyscf/cc/tests/test_thc_engine.py \
+  gpu4pyscf/cc/tests/test_thc_eri.py \
+  gpu4pyscf/cc/tests/test_thc_eri_factorization.py \
   gpu4pyscf/cc/tests/test_thc_factorization.py \
   gpu4pyscf/cc/tests/test_thc_residual.py \
   gpu4pyscf/cc/tests/test_thc_rrccsd_cd.py \

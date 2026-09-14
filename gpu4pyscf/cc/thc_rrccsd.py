@@ -77,11 +77,12 @@ class THCRRCCSD(RRCCSD):
     symmetric-core validation surrogate.
 
     ``eri_backend="cd"`` currently admits only the analytic full-pair THC
-    endpoint. It splits the complete RR doubles numerator into the exact paper
-    Algorithms 1--3 contribution and its complement, then applies the endpoint
-    as ``complement + R123_THC``. Lower THC ranks remain fail closed until the
-    water2/water4 residual and accuracy gates pass. The normal path never
-    constructs dense doubles and remains performance ineligible.
+    endpoint. It constructs the complement from the six exact RR component
+    kernels with ``-R123_RR`` as the initial offset, while exact-RR and THC
+    Algorithms 1--3 share each T1-transformed Cholesky block. It then applies
+    the endpoint as ``complement + R123_THC``. Lower THC ranks remain fail
+    closed until the water2/water4 residual and accuracy gates pass. The normal
+    path never constructs dense doubles and remains performance ineligible.
     """
 
     implementation_stage = "dense-two-level-validation"
@@ -287,8 +288,8 @@ class THCRRCCSD(RRCCSD):
                 "performance_limitations": [
                     "inexact amplitude THC is fail-closed",
                     (
-                        "the proof decomposition has not fused duplicate "
-                        "RR/R123 contractions"
+                        "all six exact RR component kernels and the exact "
+                        "R123 subtraction oracle are still evaluated"
                     ),
                     (
                         "THC engine does not consume rr_ring_kernel; the "

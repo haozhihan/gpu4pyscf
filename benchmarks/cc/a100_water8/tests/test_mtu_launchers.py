@@ -155,6 +155,8 @@ def test_gpu_launcher_runs_low_rank_residual_and_public_driver_tests() -> None:
 
     assert "gpu4pyscf/cc/tests/test_full_space_residual.py" in text
     assert "gpu4pyscf/cc/tests/test_thc_engine.py" in text
+    assert "gpu4pyscf/cc/tests/test_thc_eri.py" in text
+    assert "gpu4pyscf/cc/tests/test_thc_eri_factorization.py" in text
     assert "gpu4pyscf/cc/tests/test_thc_rrccsd_cd.py" in text
 
 
