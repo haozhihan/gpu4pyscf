@@ -217,6 +217,7 @@ class RRCCSDDoublesResult:
     fock_intermediates: CCFockIntermediates
     lagrangian_one_body: "CCLagrangianOneBody"
     term_metadata: tuple[dict[str, Any], ...]
+    wvvvv_kernel: str = "fused"
     materialized_dense_t2: bool = False
     materialized_four_index_eri: bool = False
 
@@ -241,6 +242,7 @@ class RRCCSDDoublesResult:
             "fock_intermediates": self.fock_intermediates.metadata(),
             "lagrangian_one_body": self.lagrangian_one_body.metadata(),
             "terms": list(self.term_metadata),
+            "wvvvv_kernel": self.wvvvv_kernel,
             "materialized_dense_t2": bool(self.materialized_dense_t2),
             "materialized_four_index_eri": bool(
                 self.materialized_four_index_eri
@@ -261,6 +263,7 @@ class RRCCSDDoublesComponents:
     terms: tuple[RRResidualTermResult, ...]
     fock_intermediates: CCFockIntermediates
     lagrangian_one_body: "CCLagrangianOneBody"
+    wvvvv_kernel: str = "fused"
     materialized_dense_t2: bool = False
     materialized_four_index_eri: bool = False
 
@@ -295,6 +298,7 @@ class RRCCSDDoublesComponents:
             "fock_intermediates": self.fock_intermediates.metadata(),
             "lagrangian_one_body": self.lagrangian_one_body.metadata(),
             "terms": list(self.term_metadata),
+            "wvvvv_kernel": self.wvvvv_kernel,
             "assembled_complete_core": False,
             "materialized_dense_t2": bool(self.materialized_dense_t2),
             "materialized_four_index_eri": bool(
@@ -1711,6 +1715,87 @@ def estimate_projected_cc_wvvvv_workspace_nbytes(
     }
 
 
+def projected_cc_wvvvv_two_ladder(
+    doubles: RRDoubles,
+    t1: Any,
+    lov: Any,
+    lvv: Any,
+    *,
+    auxiliary_block_size: Optional[int] = None,
+) -> RRResidualTermResult:
+    """Evaluate ``cc_Wvvvv * tau`` with the pre-fusion two-ladder path.
+
+    This is the equation-level oracle for the fused bilinear implementation in
+    :func:`projected_cc_wvvvv`.  It is intentionally retained as an explicit
+    selectable kernel so an A/B run can evaluate both algorithms from the same
+    resident RR amplitudes and CD factors without changing orbitals or
+    rebuilding the lifecycle.
+    """
+
+    vectors = doubles.projector.vectors
+    core = doubles.core
+    if not _same_backend(vectors, core, t1, lov, lvv):
+        raise TypeError("RR amplitudes, t1, and CD factors need one backend")
+    _require_real_floating(vectors, core, t1, lov, lvv)
+    nocc, nvir, rank = doubles.nocc, doubles.nvir, doubles.rank
+    if t1.shape != (nocc, nvir):
+        raise ValueError("t1 shape does not match RR doubles")
+    if getattr(lov, "ndim", None) != 3 or lov.shape[1:] != (nocc, nvir):
+        raise ValueError("lov must have shape (naux,nocc,nvir)")
+    if getattr(lvv, "ndim", None) != 3 or lvv.shape != (
+        lov.shape[0], nvir, nvir
+    ):
+        raise ValueError("lvv must have shape (naux,nvir,nvir)")
+    naux = int(lov.shape[0])
+    block_size = naux if auxiliary_block_size is None else int(
+        auxiliary_block_size
+    )
+    if block_size < 1:
+        raise ValueError("auxiliary_block_size must be positive")
+    xp = _array_module(vectors)
+    projected = xp.zeros(
+        (rank, rank), dtype=xp.result_type(vectors, core, t1, lov, lvv)
+    )
+    largest = 0
+    for start in range(0, naux, block_size):
+        stop = min(start + block_size, naux)
+        correction = xp.einsum("Akc,ka->Aac", lov[start:stop], t1)
+        transformed = lvv[start:stop] - correction
+        transformed_ladder = _projected_symmetric_ladder(
+            doubles,
+            t1,
+            transformed,
+            sector="virtual",
+            auxiliary_block_size=stop - start,
+        )
+        correction_ladder = _projected_symmetric_ladder(
+            doubles,
+            t1,
+            correction,
+            sector="virtual",
+            auxiliary_block_size=stop - start,
+        )
+        projected += transformed_ladder.core - correction_ladder.core
+        largest = max(
+            largest,
+            int(correction.nbytes),
+            int(transformed.nbytes),
+            int(transformed_ladder.core.nbytes),
+            int(correction_ladder.core.nbytes),
+            int(transformed_ladder.largest_intermediate_nbytes),
+            int(correction_ladder.largest_intermediate_nbytes),
+        )
+    projected = projected + projected.T
+    projected *= 0.5
+    return RRResidualTermResult(
+        core=projected,
+        term="complete-cc-Wvvvv-ladder",
+        auxiliary_block_size=block_size,
+        largest_intermediate_nbytes=largest,
+        kernel_name="rr-wvvvv-two-ladder",
+    )
+
+
 def projected_cc_wvvvv(
     doubles: RRDoubles,
     t1: Any,
@@ -1881,6 +1966,7 @@ def projected_cc_wvvvv(
         term="complete-cc-Wvvvv-ladder",
         auxiliary_block_size=block_size,
         largest_intermediate_nbytes=largest,
+        kernel_name="rr-wvvvv-fused",
         workspace_shape_upper_bound=workspace,
     )
 
@@ -2926,6 +3012,13 @@ def projected_cc_ring_gemm(
     )
 
 
+def _normalized_wvvvv_kernel(value: Any) -> str:
+    selector = str(value).strip().lower()
+    if selector not in {"two-ladder", "fused"}:
+        raise ValueError("wvvvv_kernel must be 'two-ladder' or 'fused'")
+    return selector
+
+
 def build_projected_ccsd_doubles_components(
     doubles: RRDoubles,
     t1: Any,
@@ -2942,6 +3035,7 @@ def build_projected_ccsd_doubles_components(
     auxiliary_block_size: int = 1,
     virtual_block_size: int = 8,
     ring_kernel: str = "reference",
+    wvvvv_kernel: str = "fused",
     transfer_counter: Any = None,
     profile_phase: Optional[RRDoublesProfilePhase] = None,
 ) -> RRCCSDDoublesComponents:
@@ -2949,8 +3043,9 @@ def build_projected_ccsd_doubles_components(
 
     Keeping the six coarse equation groups separate lets the ordinary RR
     path sum from zero while a hybrid path sums from a signed ``R_123``
-    offset.  ``ring_kernel`` remains an explicit selector so the bounded
-    reference is the default and ``"gemm"`` opts into the tiled GEMM path.
+    offset.  ``ring_kernel`` selects the crossed-ring contraction and
+    ``wvvvv_kernel`` selects either the retained two-ladder oracle or the
+    algebraically fused bilinear ladder.
     """
 
     vectors = doubles.projector.vectors
@@ -2977,6 +3072,7 @@ def build_projected_ccsd_doubles_components(
     ring_kernel = str(ring_kernel).lower()
     if ring_kernel not in {"reference", "gemm"}:
         raise ValueError("ring_kernel must be 'reference' or 'gemm'")
+    wvvvv_kernel = _normalized_wvvvv_kernel(wvvvv_kernel)
     ablock = int(auxiliary_block_size)
     vblock = int(virtual_block_size)
     if ablock < 1 or vblock < 1:
@@ -2987,6 +3083,7 @@ def build_projected_ccsd_doubles_components(
         return {
             "coarse_term": coarse_term,
             "ring_kernel": ring_kernel,
+            "wvvvv_kernel": wvvvv_kernel,
             "auxiliary_block_size": ablock,
             "virtual_block_size": vblock,
         }
@@ -3069,8 +3166,13 @@ def build_projected_ccsd_doubles_components(
         phase_metadata("wvvvv"),
         profile_phase,
     ):
+        wvvvv_builder = (
+            projected_cc_wvvvv_two_ladder
+            if wvvvv_kernel == "two-ladder"
+            else projected_cc_wvvvv
+        )
         terms.append(
-            projected_cc_wvvvv(
+            wvvvv_builder(
                 doubles,
                 t1,
                 lov,
@@ -3113,6 +3215,7 @@ def build_projected_ccsd_doubles_components(
         terms=tuple(terms),
         fock_intermediates=f_intermediates,
         lagrangian_one_body=lagrangian,
+        wvvvv_kernel=wvvvv_kernel,
     )
 
 
@@ -3132,6 +3235,7 @@ def build_projected_ccsd_doubles_numerator(
     auxiliary_block_size: int = 1,
     virtual_block_size: int = 8,
     ring_kernel: str = "reference",
+    wvvvv_kernel: str = "fused",
     transfer_counter: Any = None,
     profile_phase: Optional[RRDoublesProfilePhase] = None,
 ) -> RRCCSDDoublesResult:
@@ -3152,6 +3256,7 @@ def build_projected_ccsd_doubles_numerator(
         auxiliary_block_size=auxiliary_block_size,
         virtual_block_size=virtual_block_size,
         ring_kernel=ring_kernel,
+        wvvvv_kernel=wvvvv_kernel,
         transfer_counter=transfer_counter,
         profile_phase=profile_phase,
     )
@@ -3160,6 +3265,7 @@ def build_projected_ccsd_doubles_numerator(
         fock_intermediates=components.fock_intermediates,
         lagrangian_one_body=components.lagrangian_one_body,
         term_metadata=components.term_metadata,
+        wvvvv_kernel=components.wvvvv_kernel,
     )
 
 
@@ -3188,6 +3294,7 @@ __all__ = [
     "projected_oooo_ladder",
     "projected_cc_woooo",
     "projected_cc_wvvvv",
+    "projected_cc_wvvvv_two_ladder",
     "projected_cc_ring",
     "projected_cc_ring_gemm",
     "estimate_projected_cc_wvvvv_workspace_nbytes",

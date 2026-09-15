@@ -64,6 +64,7 @@ def _engine_problem(
     nvir=3,
     naux=4,
     rr_ring_kernel="reference",
+    wvvvv_kernel="fused",
     rank=None,
 ):
     rng = np.random.default_rng(seed)
@@ -106,6 +107,7 @@ def _engine_problem(
         auxiliary_block_size=2,
         virtual_block_size=2,
         rr_ring_kernel=rr_ring_kernel,
+        wvvvv_kernel=wvvvv_kernel,
     )
     return engine, xp.asarray(t1), doubles
 
@@ -190,6 +192,7 @@ def test_full_rank_engine_jacobi_solves_both_projected_equations():
         ],
         "term_sum_is_complete_doubles_time": False,
         "ring_kernel": "reference",
+        "wvvvv_kernel": "fused",
         "auxiliary_block_size": 2,
         "virtual_block_size": 2,
     }
@@ -362,6 +365,60 @@ def test_engine_gemm_ring_matches_reference_on_full_and_truncated_rr(rank_full):
 def test_engine_rejects_unknown_ring_kernel():
     with pytest.raises(ValueError, match="rr_ring_kernel"):
         _engine_problem(rr_ring_kernel="unknown")
+
+
+@pytest.mark.parametrize("rank_full", [False, True])
+def test_engine_wvvvv_selector_matches_two_ladder_oracle(rank_full):
+    nocc, nvir = 2, 3
+    rank = nocc * nvir if rank_full else nocc * nvir - 1
+    reference_engine, reference_t1, reference_doubles = _engine_problem(
+        seed=411,
+        nocc=nocc,
+        nvir=nvir,
+        rank=rank,
+        wvvvv_kernel="two-ladder",
+    )
+    fused_engine, fused_t1, fused_doubles = _engine_problem(
+        seed=411,
+        nocc=nocc,
+        nvir=nvir,
+        rank=rank,
+        wvvvv_kernel="fused",
+    )
+
+    reference = reference_engine.jacobi(reference_t1, reference_doubles)
+    fused = fused_engine.jacobi(fused_t1, fused_doubles)
+
+    np.testing.assert_allclose(fused.t1, reference.t1, atol=3e-10)
+    np.testing.assert_allclose(
+        fused.doubles_equation.core,
+        reference.doubles_equation.core,
+        atol=3e-9,
+    )
+    np.testing.assert_allclose(
+        fused.doubles.core, reference.doubles.core, atol=3e-9
+    )
+    np.testing.assert_allclose(fused.energy, reference.energy, atol=3e-10)
+    np.testing.assert_allclose(
+        fused.residual_norm, reference.residual_norm, atol=3e-9
+    )
+    assert reference_engine.metadata()["wvvvv_kernel"] == "two-ladder"
+    assert fused_engine.metadata()["wvvvv_kernel"] == "fused"
+    reference_wvvvv = next(
+        term for term in reference.doubles_equation.term_metadata
+        if term["term"] == "complete-cc-Wvvvv-ladder"
+    )
+    fused_wvvvv = next(
+        term for term in fused.doubles_equation.term_metadata
+        if term["term"] == "complete-cc-Wvvvv-ladder"
+    )
+    assert reference_wvvvv["kernel_name"] == "rr-wvvvv-two-ladder"
+    assert fused_wvvvv["kernel_name"] == "rr-wvvvv-fused"
+
+
+def test_engine_rejects_unknown_wvvvv_kernel():
+    with pytest.raises(ValueError, match="wvvvv_kernel"):
+        _engine_problem(wvvvv_kernel="unknown")
 
 
 def test_zero_problem_kernel_converges_without_dense_doubles():

@@ -20,8 +20,10 @@ the singles and projected doubles equations without calling canonical
 ``update_amps``, solves both denominators, and keeps DIIS in compressed space.
 
 The ring selector defaults to the exact bounded-memory reference kernel and
-can opt into the numerically equivalent tiled GEMM path. Both variants remain
-performance ineligible until the A100 gates pass.
+can opt into the numerically equivalent tiled GEMM path.  The Wvvvv selector
+retains the pre-fusion two-ladder oracle beside the default fused bilinear
+kernel so both can consume one resident iteration state in an A/B audit.
+All variants remain performance ineligible until the A100 gates pass.
 """
 
 from __future__ import annotations
@@ -214,6 +216,7 @@ class RRCCSDIterationEngine:
         auxiliary_block_size: int = 1,
         virtual_block_size: int = 8,
         rr_ring_kernel: str = "reference",
+        wvvvv_kernel: str = "fused",
         metrics: Optional[RunMetrics] = None,
     ) -> None:
         if not isinstance(integrals, MOThreeIndexIntegralProvider):
@@ -237,6 +240,11 @@ class RRCCSDIterationEngine:
         rr_ring_kernel = str(rr_ring_kernel).lower()
         if rr_ring_kernel not in {"reference", "gemm"}:
             raise ValueError("rr_ring_kernel must be 'reference' or 'gemm'")
+        wvvvv_kernel = str(wvvvv_kernel).strip().lower()
+        if wvvvv_kernel not in {"two-ladder", "fused"}:
+            raise ValueError(
+                "wvvvv_kernel must be 'two-ladder' or 'fused'"
+            )
         self.integrals = integrals
         self.projector = projector
         self.fock = fock
@@ -245,6 +253,7 @@ class RRCCSDIterationEngine:
         self.auxiliary_block_size = int(auxiliary_block_size)
         self.virtual_block_size = int(virtual_block_size)
         self.rr_ring_kernel = rr_ring_kernel
+        self.wvvvv_kernel = wvvvv_kernel
         self.metrics = metrics or RunMetrics("rr-ccsd-iteration-engine")
         self.xp = _array_module(factors)
         self.nocc = nocc
@@ -252,6 +261,12 @@ class RRCCSDIterationEngine:
         self.fock_oo = fock[:nocc, :nocc]
         self.fock_ov = fock[:nocc, nocc:]
         self.fock_vv = fock[nocc:, nocc:]
+        # Keep one set of views for the complete resident lifecycle.  Besides
+        # avoiding repeated wrapper allocation, this gives same-state A/B
+        # audits exact CuPy object identities at every equation scope.
+        self.L_oo = integrals.L_oo
+        self.L_ov = integrals.L_ov
+        self.L_vv = integrals.L_vv
         self.occupied_energies = orbital_energies[:nocc]
         self.virtual_energies = orbital_energies[nocc:]
         self.eia = (
@@ -271,6 +286,7 @@ class RRCCSDIterationEngine:
         ).metadata()
         profile_metadata.update({
             "ring_kernel": self.rr_ring_kernel,
+            "wvvvv_kernel": self.wvvvv_kernel,
             "auxiliary_block_size": self.auxiliary_block_size,
             "virtual_block_size": self.virtual_block_size,
         })
@@ -303,9 +319,9 @@ class RRCCSDIterationEngine:
                     self.fock_vv,
                     self.occupied_energies,
                     self.virtual_energies,
-                    self.integrals.L_oo,
-                    self.integrals.L_ov,
-                    self.integrals.L_vv,
+                    self.L_oo,
+                    self.L_ov,
+                    self.L_vv,
                     level_shift=self.level_shift,
                     auxiliary_block_size=self.auxiliary_block_size,
                 )
@@ -327,13 +343,14 @@ class RRCCSDIterationEngine:
                         self.fock_vv,
                         self.occupied_energies,
                         self.virtual_energies,
-                        self.integrals.L_oo,
-                        self.integrals.L_ov,
-                        self.integrals.L_vv,
+                        self.L_oo,
+                        self.L_ov,
+                        self.L_vv,
                         level_shift=self.level_shift,
                         auxiliary_block_size=self.auxiliary_block_size,
                         virtual_block_size=self.virtual_block_size,
                         ring_kernel=self.rr_ring_kernel,
+                        wvvvv_kernel=self.wvvvv_kernel,
                         transfer_counter=self.metrics.transfers,
                         profile_phase=doubles_timing.phase,
                     )
@@ -370,7 +387,7 @@ class RRCCSDIterationEngine:
                 doubles,
                 t1,
                 self.fock_ov,
-                self.integrals.L_ov,
+                self.L_ov,
                 auxiliary_block_size=self.auxiliary_block_size,
             ).value
         except BaseException:
@@ -484,6 +501,7 @@ class RRCCSDIterationEngine:
             "integrals": self.integrals.metadata(),
             "projector_rank": self.projector.rank,
             "ring_kernel": self.rr_ring_kernel,
+            "wvvvv_kernel": self.wvvvv_kernel,
             "performance_eligible": False,
             "diis": diis.metadata(),
             "converged": converged,
@@ -506,6 +524,7 @@ class RRCCSDIterationEngine:
         ).metadata()
         term_profile.update({
             "ring_kernel": self.rr_ring_kernel,
+            "wvvvv_kernel": self.wvvvv_kernel,
             "auxiliary_block_size": self.auxiliary_block_size,
             "virtual_block_size": self.virtual_block_size,
         })
@@ -517,6 +536,7 @@ class RRCCSDIterationEngine:
             "auxiliary_block_size": self.auxiliary_block_size,
             "virtual_block_size": self.virtual_block_size,
             "rr_ring_kernel": self.rr_ring_kernel,
+            "wvvvv_kernel": self.wvvvv_kernel,
             "dense_t2_in_iteration": False,
             "four_index_eri_in_iteration": False,
             "ring_kernel": self.rr_ring_kernel,

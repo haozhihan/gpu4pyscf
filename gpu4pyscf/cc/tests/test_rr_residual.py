@@ -22,6 +22,7 @@ from gpu4pyscf.cc.rr_residual import (
     projected_cc_ring_gemm,
     estimate_rr_ring_workspace_nbytes,
     projected_cc_wvvvv,
+    projected_cc_wvvvv_two_ladder,
     projected_coulomb_ppl,
     projected_linear_t1_doubles,
     projected_one_body_dressing,
@@ -477,6 +478,7 @@ def test_complete_projected_doubles_numerator_matches_dense_equation(full_rank):
         observed.core,
     )
     assert components.metadata()["assembled_complete_core"] is False
+    assert components.metadata()["wvvvv_kernel"] == "fused"
     expected_phases = [
         "rr_doubles_fock_intermediates",
         "rr_doubles_lagrangian",
@@ -510,8 +512,38 @@ def test_complete_projected_doubles_numerator_matches_dense_equation(full_rank):
         "ring",
     ]
     assert all(item["ring_kernel"] == "reference" for item in entered_metadata)
+    assert all(item["wvvvv_kernel"] == "fused" for item in entered_metadata)
     assert all(item["auxiliary_block_size"] == 2 for item in entered_metadata)
     assert all(item["virtual_block_size"] == 3 for item in entered_metadata)
+    two_ladder = build_projected_ccsd_doubles_numerator(
+        doubles,
+        t1,
+        fock_oo,
+        fock_ov,
+        fock_vv,
+        occupied_energies,
+        virtual_energies,
+        loo,
+        lov,
+        lvv,
+        level_shift=level_shift,
+        auxiliary_block_size=2,
+        virtual_block_size=3,
+        wvvvv_kernel="two-ladder",
+    )
+    np.testing.assert_allclose(two_ladder.core, observed.core, atol=6e-10)
+    assert observed.metadata()["wvvvv_kernel"] == "fused"
+    assert two_ladder.metadata()["wvvvv_kernel"] == "two-ladder"
+    observed_wvvvv = next(
+        term for term in observed.metadata()["terms"]
+        if term["term"] == "complete-cc-Wvvvv-ladder"
+    )
+    reference_wvvvv = next(
+        term for term in two_ladder.metadata()["terms"]
+        if term["term"] == "complete-cc-Wvvvv-ladder"
+    )
+    assert observed_wvvvv["kernel_name"] == "rr-wvvvv-fused"
+    assert reference_wvvvv["kernel_name"] == "rr-wvvvv-two-ladder"
     gemm = build_projected_ccsd_doubles_numerator(
         doubles,
         t1,
@@ -546,6 +578,20 @@ def test_complete_projected_doubles_numerator_matches_dense_equation(full_rank):
             lov,
             lvv,
             ring_kernel="invalid",
+        )
+    with pytest.raises(ValueError, match="wvvvv_kernel"):
+        build_projected_ccsd_doubles_numerator(
+            doubles,
+            t1,
+            fock_oo,
+            fock_ov,
+            fock_vv,
+            occupied_energies,
+            virtual_energies,
+            loo,
+            lov,
+            lvv,
+            wvvvv_kernel="invalid",
         )
 
     if full_rank:
@@ -910,38 +956,6 @@ def test_projected_complete_cc_wvvvv_matches_dense_reference():
     assert observed.materialized_dense_t2 is False
 
 
-def _two_ladder_cc_wvvvv_reference(
-    doubles, t1, lov, lvv, *, auxiliary_block_size
-):
-    """Pre-fusion implementation retained as a focused numerical oracle."""
-
-    xp = rr_residual_module._array_module(doubles.core)
-    projected = xp.zeros_like(doubles.core)
-    naux = int(lov.shape[0])
-    for start in range(0, naux, auxiliary_block_size):
-        stop = min(start + auxiliary_block_size, naux)
-        correction = xp.einsum(
-            "Akc,ka->Aac", lov[start:stop], t1
-        )
-        transformed = lvv[start:stop] - correction
-        first = rr_residual_module._projected_symmetric_ladder(
-            doubles,
-            t1,
-            transformed,
-            sector="virtual",
-            auxiliary_block_size=stop - start,
-        )
-        second = rr_residual_module._projected_symmetric_ladder(
-            doubles,
-            t1,
-            correction,
-            sector="virtual",
-            auxiliary_block_size=stop - start,
-        )
-        projected += first.core - second.core
-    return (projected + projected.T) * 0.5
-
-
 @pytest.mark.parametrize(
     ("nocc", "nvir", "naux", "rank", "block_size"),
     [(2, 3, 5, 4, 2), (3, 4, 4, 5, 3), (2, 3, 3, 4, 1)],
@@ -964,7 +978,7 @@ def test_fused_cc_wvvvv_matches_two_ladder_fp64_reference(
     lov = rng.normal(size=(naux, nocc, nvir))
     lvv = rng.normal(size=(naux, nvir, nvir))
 
-    expected = _two_ladder_cc_wvvvv_reference(
+    reference = projected_cc_wvvvv_two_ladder(
         doubles,
         t1,
         lov,
@@ -980,11 +994,12 @@ def test_fused_cc_wvvvv_matches_two_ladder_fp64_reference(
     )
 
     np.testing.assert_allclose(
-        observed.core, expected, atol=3e-11, rtol=3e-12
+        observed.core, reference.core, atol=3e-11, rtol=3e-12
     )
+    assert reference.kernel_name == "rr-wvvvv-two-ladder"
     assert observed.term == "complete-cc-Wvvvv-ladder"
     assert observed.auxiliary_block_size == block_size
-    assert observed.kernel_name == "rr-factorized-reference"
+    assert observed.kernel_name == "rr-wvvvv-fused"
     assert observed.materialized_dense_t2 is False
     assert observed.largest_intermediate_nbytes >= core.nbytes
 
@@ -1141,7 +1156,7 @@ def test_gpu_fused_cc_wvvvv_matches_two_ladder_fp64_reference():
         nocc,
         nvir,
     )
-    expected = _two_ladder_cc_wvvvv_reference(
+    reference = projected_cc_wvvvv_two_ladder(
         cpu_doubles,
         t1,
         lov,
@@ -1168,7 +1183,7 @@ def test_gpu_fused_cc_wvvvv_matches_two_ladder_fp64_reference():
     )
 
     cp.testing.assert_allclose(
-        observed.core, cp.asarray(expected), atol=3e-11, rtol=3e-12
+        observed.core, cp.asarray(reference.core), atol=3e-11, rtol=3e-12
     )
 
 
