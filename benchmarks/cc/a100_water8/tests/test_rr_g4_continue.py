@@ -134,6 +134,15 @@ def test_diagnostic_gate_accepts_orthogonal_projector_and_finite_residual() -> N
     }
 
 
+def test_diagnostic_gate_accepts_exact_orthogonality_threshold() -> None:
+    checks, measurements = rr_g4._diagnostic_gate(
+        _diagnostic_record(rr_g4.PROJECTOR_ORTHOGONALITY_TOLERANCE, 0.0)
+    )
+    assert checks["projector_orthogonality_1e_10"] is True
+    assert checks["full_space_diagnostic_recorded"] is True
+    assert measurements["projector_orthogonality_error"] == pytest.approx(1e-10)
+
+
 def test_projected_residual_norm_rejects_negative_value() -> None:
     record = {"residual": {"projected_equation": -1e-12}}
     assert rr_g4._projected_residual(record) is None
