@@ -1,6 +1,6 @@
 {
   "schema": "gpu4pyscf.water8.implementation-status.v2",
-  "as_of_utc": "2026-09-15T07:18:17.897613+00:00",
+  "as_of_utc": "2026-09-15T07:23:49.634648+00:00",
   "purpose": "Candid implementation and MTU evidence ledger for the fixed WATER27 H2O8d2d single-A100 CCSD project.",
   "claim_policy": {
     "ten_x_claim_allowed": false,
@@ -20,7 +20,7 @@
     "g0_worktree": "analysis/research/ccsd/gpu4pyscf-g0-baseline",
     "feature_source_state": "published-eq36-algebra-gate-passed-algorithms8-10-version-of-record-numbering-audited-production-disabled-plus-snapshot-a-qualification-queued",
     "feature_performance_eligible": false,
-    "feature_head_before_ledger_update": "268ced2b090f6b5f7486ecbaf58c2361df3e3e06",
+    "feature_head_before_ledger_update": "80710ecef79310b69a16e83594d042c9be8485f1",
     "merged_implementation_commits": {
       "fused_r123": "29ceab6",
       "fixed_gpu_test_node": "56291e7",
@@ -67,13 +67,14 @@
       "rr_orthogonality_threshold_boundary_test": "4e67878",
       "receipt_bound_gate_ledger": "92008c5",
       "published_thc_omega_d_equation_audit": "1a9eeb3",
-      "published_algorithms_8_10_numbering_audit": "268ced2"
+      "published_algorithms_8_10_numbering_audit": "268ced2",
+      "published_complete_thc_ledger_numbering_audit": "80710ec"
     },
     "current_snapshot_a_head": "92008c580fb90c9c49f7cf1f6b087726650df9dd",
-    "previous_ledger_head": "f77ef517bfaa62ef1676d8b2177d918f69c1719d",
-    "previous_ledger_head_role": "restored MTU queue-state ledger after immutable Snapshot A; Job 63020 remains bound to 92008c5",
-    "head_before_this_ledger_update": "268ced2b090f6b5f7486ecbaf58c2361df3e3e06",
-    "head_before_this_ledger_update_role": "published Algorithms 8-10 equation-numbering and nonacceptance-reason audit; immutable Snapshot A bytes remain unchanged"
+    "previous_ledger_head": "91b96b2622ad71e831d9473e35ba5d436d89e9b6",
+    "previous_ledger_head_role": "published Algorithms 8-10 endpoint-numbering ledger after immutable Snapshot A; Job 63020 remains bound to 92008c5",
+    "head_before_this_ledger_update": "80710ecef79310b69a16e83594d042c9be8485f1",
+    "head_before_this_ledger_update_role": "complete Algorithms 1-10 assembler ledger numbering audit; immutable Snapshot A bytes remain unchanged"
   },
   "current_qualification_observation": {
     "evidence_state": "local_measured",
@@ -1242,7 +1243,7 @@
         "Audit-only paper Algorithm 6 evaluates the joint Omega-A/Omega-C contraction schedule with dense equation oracles (f2f8e6c).",
         "Factorized MP2 natural-occupation weights are derived without dense four-index ERIs and remain audit-only (4c175a1).",
         "Audit-only paper Algorithm 7 exposes Omega-D components and signed Appendix schedules (aae92e0).",
-        "Audit-only paper Algorithms 8-10 expose Omega-G/H, Omega-E, and Omega-I/J endpoints with dense published Eq. 39-43 oracles, explicit arXiv-v1 legacy numbering, asymmetric-core tests, and fail-closed backend/device/dtype/finite checks (268ced2).",
+        "Audit-only paper Algorithms 8-10 expose Omega-G/H, Omega-E, and Omega-I/J endpoints with dense published Eq. 39-43 oracles, explicit arXiv-v1 legacy numbering, asymmetric-core tests, and fail-closed backend/device/dtype/finite checks (268ced2); the complete Algorithms 1-10 assembler ledger uses the same version-of-record authority and records direct outputs as Algorithm 8 Eq. 39-41, Algorithm 9 Eq. 42, and Algorithm 10 Eq. 43 (80710ec).",
         "Weighted ERI-THC preprocessing connects factorized MP2 weights to the Eq. 17/Eqs. 19-21 audit seam without enabling the production driver (59c5aee).",
         "The complete THC audit CUDA suite is registered by 9f19693 and its cross-BLAS portability assertions are corrected by 5256763.",
         "The provenance-bound T1-transformed inactive F-hat builder independently constructs the one-electron and Cholesky contributions required by Algorithms 8-10 without dense four-index ERIs or doubles (a1adb89).",
@@ -1337,7 +1338,9 @@
           "instance_numerical_equivalence_oracle": "thc_omega_cd_joint_audit"
         },
         "algorithms_8_10_state": {
-          "source_commit": "268ced2",
+          "source_commit": "80710ec",
+          "endpoint_source_commit": "268ced2",
+          "complete_ledger_source_commit": "80710ec",
           "audit_only": true,
           "production_enabled": false,
           "performance_eligible": false,
@@ -1373,10 +1376,38 @@
             ]
           },
           "algorithm8_boundary": "Published Eq. 39 uses l_ji D_ja while Appendix Algorithm 8 line 13 prints l_ij D_ja; both are exposed separately for audit and no production convention is selected.",
-          "focused_tests_passed": 34,
-          "focused_tests_skipped_environment": 3,
+          "focused_tests_passed": 70,
+          "focused_tests_skipped_environment": 5,
           "all_thc_tests_passed": 256,
           "all_thc_tests_skipped_environment": 34,
+          "complete_ledger_entry_equation_semantics": "published equations whose tensors are directly emitted by each endpoint; dependencies consumed from earlier algorithms are not repeated",
+          "complete_ledger_published_direct_equation_numbers": {
+            "algorithm8": [
+              39,
+              40,
+              41
+            ],
+            "algorithm9": [
+              42
+            ],
+            "algorithm10": [
+              43
+            ]
+          },
+          "complete_ledger_legacy_arxiv_v1_direct_equation_numbers": {
+            "algorithm8": [
+              38,
+              39,
+              40
+            ],
+            "algorithm9": [
+              41
+            ],
+            "algorithm10": [
+              42
+            ]
+          },
+          "independent_review": "one-P1-complete-ledger-numbering-defect-detected-and-corrected; independent re-review found no P0-P3",
           "stale_eq35_acceptance_reason_removed": true,
           "legacy_arxiv_v1_eq35_acceptance_blocker": false,
           "unresolved_conventions": [

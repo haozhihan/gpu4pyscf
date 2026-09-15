@@ -232,6 +232,11 @@ requires a symmetric amplitude core; nonsymmetric cores exercise only the
 literal appendix schedule. The final JCP version of record numbers Algorithm
 8 as Eqs. 39--41, Algorithm 9 as Eqs. 40--42, and Algorithm 10 as Eq. 43; the
 corresponding arXiv-v1 numbers 38--40, 39--41, and 42 remain legacy metadata.
+The complete Algorithms 1--10 ledger records equations that each endpoint
+directly emits: Algorithm 8 has published Eqs. 39--41, Algorithm 9 has Eq. 42,
+and Algorithm 10 has Eq. 43. Algorithm 9's endpoint metadata additionally
+lists Eqs. 40--41 because it consumes those Algorithm 8 intermediates; the
+ledger does not repeat consumed dependencies.
 
 `build_t1_transformed_fhat(...)` (commit `a1adb89`) now provides the separate
 inactive F-hat audit required by Algorithms 8--10. It applies the T1 orbital transforms to
