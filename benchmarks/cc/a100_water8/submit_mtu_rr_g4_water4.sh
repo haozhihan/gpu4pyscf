@@ -7,6 +7,7 @@ BASELINE_ROOT=/mnt/mridata/vxu/thu-likun/hanhaozhi/agent-ccsd-baseline-20260913
 PYTHON="${BASELINE_ROOT}/.venv/bin/python"
 SOURCE_ROOT="${CCSD_SOURCE_ROOT:?set the release-B snapshot source}"
 RECEIPT="${GINT_RUNTIME_GATE_RECEIPT:?set the release-B GINT receipt}"
+ACCEPTANCE="${GINT_RELEASE_GATE_ACCEPTANCE:?set the completed release-gate acceptance}"
 STAGE="${G4_STAGE:?set G4_STAGE to spectrum, probe, or converge}"
 RUN_ID="${G4_RUN_ID:?set a unique G4_RUN_ID}"
 case "${STAGE}" in spectrum|probe|converge) ;; *) exit 2 ;; esac
@@ -35,7 +36,8 @@ if [[ "${STAGE}" == "spectrum" ]]; then
   fi
   NODE=$("${PYTHON}" "${DRIVER}" receipt-node \
     --source-root "${SOURCE_ROOT}" \
-    --gint-runtime-gate-receipt "${RECEIPT}")
+    --gint-runtime-gate-receipt "${RECEIPT}" \
+    --gint-release-gate-acceptance "${ACCEPTANCE}")
 else
   CUTOFF="${G4_RR_EIG_CUTOFF:?set G4_RR_EIG_CUTOFF}"
   SPECTRUM="${G4_SPECTRUM_SUMMARY:?set G4_SPECTRUM_SUMMARY}"
@@ -43,6 +45,7 @@ else
     "${PYTHON}" "${DRIVER}" authorize
     --task-root "${TASK_ROOT}" --source-root "${SOURCE_ROOT}"
     --gint-runtime-gate-receipt "${RECEIPT}"
+    --gint-release-gate-acceptance "${ACCEPTANCE}"
     --stage "${STAGE}" --rr-eig-cutoff "${CUTOFF}"
     --spectrum-summary "${SPECTRUM}"
   )
@@ -61,10 +64,13 @@ if ! mkdir "${OUTPUT_DIR}"; then
   exit 2
 fi
 "${PYTHON}" - "${OUTPUT_DIR}/request.json" "${STAGE}" "${RUN_ID}" \
-  "${SOURCE_ROOT}" "${RECEIPT}" "${NODE}" <<'PY'
+  "${SOURCE_ROOT}" "${RECEIPT}" "${ACCEPTANCE}" "${NODE}" <<'PY'
 import json, os, pathlib, sys
 path = pathlib.Path(sys.argv[1])
-payload = dict(zip(("stage", "run_id", "source_root", "receipt", "node"), sys.argv[2:]))
+payload = dict(zip(
+    ("stage", "run_id", "source_root", "receipt", "release_gate_acceptance", "node"),
+    sys.argv[2:], strict=True,
+))
 fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444)
 with os.fdopen(fd, "w") as stream:
     json.dump(payload, stream, indent=2, sort_keys=True)

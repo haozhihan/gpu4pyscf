@@ -626,7 +626,9 @@ the A table. It is not a shared-projector test or a proof of full-space
 canonical/CD equivalence.
 
 Every result is bound to its planned source, output path, Slurm job, receipt
-node, `eri_tol`, and RR cutoff. The selection rule chooses the loosest point
+node, completed release-gate acceptance, `eri_tol`, and RR cutoff. G3 `plan`
+requires `--gint-release-gate-acceptance`, and `submit` regenerates the plan
+while revalidating that sealed acceptance. The selection rule chooses the loosest point
 that passes correlation-energy, projected-residual, complete counterpoise,
 resource, checkpoint, and evidence-integrity gates; a tighter passing point is
 preferred when its complete RR-CD post-HF time is no more than 3% slower than
@@ -658,6 +660,7 @@ their `status=not_converged`, one-cycle records; the canonical job must end
 ```bash
 export CCSD_SOURCE_ROOT=/mnt/mridata/vxu/thu-likun/hanhaozhi/agent-ccsd-a100-thc-rr-20260913/snapshots/RELEASE_B_SHA256/source
 export GINT_RUNTIME_GATE_RECEIPT=/mnt/mridata/vxu/thu-likun/hanhaozhi/agent-ccsd-a100-thc-rr-20260913/results/GINT_RECEIPT_DIR/receipt.json
+export GINT_RELEASE_GATE_ACCEPTANCE=/mnt/mridata/vxu/thu-likun/hanhaozhi/agent-ccsd-a100-thc-rr-20260913/results/GINT_RELEASE_ACCEPTANCE_DIR/acceptance.json
 export G4_STAGE=spectrum
 export G4_RUN_ID=g4-water4-RELEASE_B_SHORT_SHA
 "${CCSD_SOURCE_ROOT}/benchmarks/cc/a100_water8/submit_mtu_rr_g4_water4.sh"
@@ -674,6 +677,7 @@ RUN_DIR="${TASK}/results/rr-g4-water4/${G4_RUN_ID}-spectrum"
   "${CCSD_SOURCE_ROOT}/benchmarks/cc/a100_water8/rr_g4_continue.py" spectrum \
   --task-root "${TASK}" --source-root "${CCSD_SOURCE_ROOT}" \
   --gint-runtime-gate-receipt "${GINT_RUNTIME_GATE_RECEIPT}" \
+  --gint-release-gate-acceptance "${GINT_RELEASE_GATE_ACCEPTANCE}" \
   --oracle-record "${RUN_DIR}/water4-tz__canonical__r${G4_RUN_ID}-oracle.json" \
   --probe-record "${RUN_DIR}/water4-tz__rr_cd__r${G4_RUN_ID}-rank-1e9.json" \
   --probe-record "${RUN_DIR}/water4-tz__rr_cd__r${G4_RUN_ID}-rank-1e11.json" \
@@ -697,6 +701,7 @@ RUN_1E9="${TASK}/results/rr-g4-water4/${G4_RUN_ID}-converge"
   "${CCSD_SOURCE_ROOT}/benchmarks/cc/a100_water8/rr_g4_continue.py" gate \
   --task-root "${TASK}" --source-root "${CCSD_SOURCE_ROOT}" \
   --gint-runtime-gate-receipt "${GINT_RUNTIME_GATE_RECEIPT}" \
+  --gint-release-gate-acceptance "${GINT_RELEASE_GATE_ACCEPTANCE}" \
   --rr-eig-cutoff 1e-9 --spectrum-summary "${G4_SPECTRUM_SUMMARY}" \
   --rr-record "${RUN_1E9}/water4-tz__rr_cd__r${G4_RUN_ID}-rr.json" \
   --output "${RUN_1E9}/g4-gate.json"
@@ -871,6 +876,15 @@ python gint_gate_receipt.py \
   --release-pin "${RESULT_ROOT}/gint_release_pin.json"
 ```
 
+If the receipt was sealed but atomic pin publication failed, keep that receipt
+and resume only the deterministic pin step:
+
+```bash
+python gint_gate_receipt.py resume-pin \
+  --receipt "${RESULT_ROOT}/gint-runtime-gate-receipt/receipt.json" \
+  --release-pin "${RESULT_ROOT}/gint_release_pin.json"
+```
+
 Promote A into release snapshot **B**. The promotion copies exactly A,
 including the sealed publication policy and its trust-boundary evidence, embeds
 the staging pin at `gpu4pyscf/cc/gint_release_pin.json`, recalculates the normal
@@ -889,20 +903,41 @@ CCSD_RELEASE_SOURCE="$(python -c \
   "${RESULT_ROOT}/gint-release-promotion.json")"
 ```
 
-Run the same gate from B as the release check, passing only the external
-receipt path to the provider. The provider rehashes B and B-without-pin, then
+Run the same gate from B as the release check. `gint_release_gate.py` reads the
+node from the sealed receipt and embedded pin, writes a reviewable plan, and
+submits with an explicit `--nodelist=<qualification-node>`. The Slurm script
+has no fixed node directive. The provider rehashes B and B-without-pin, then
 rejects mappings, any symlink component, writable snapshot paths, altered
 evidence, and any A/B source, manifest, binary, ABI, allocation, or topology
 mismatch. The receipt must remain below the same task's `results/` directory:
 
 ```bash
-RECEIPT_PAYLOAD_SHA="$(python -c \
-  'import json,sys; print(json.load(open(sys.argv[1]))["payload_sha256"])' \
-  "${RESULT_ROOT}/gint-runtime-gate-receipt/receipt.json")"
-sbatch --parsable \
-  --job-name="gint-release-${RECEIPT_PAYLOAD_SHA}" \
-  --export="ALL,CCSD_TASK_ROOT=${CCSD_TASK_PATH},CCSD_SOURCE_ROOT=${CCSD_RELEASE_SOURCE},CCSD_EXPECTED_DEPLOYMENT_PROFILE=candidate,GINT_RUNTIME_GATE_RECEIPT=${RESULT_ROOT}/gint-runtime-gate-receipt/receipt.json" \
-  run_mtu_gint_gate.sbatch
+RELEASE_ORCH="${RESULT_ROOT}/gint-release-orchestration"
+mkdir -m 700 "${RELEASE_ORCH}"
+python "${CCSD_RELEASE_SOURCE}/benchmarks/cc/a100_water8/gint_release_gate.py" plan \
+  --task-root "${CCSD_TASK_PATH}" --source-root "${CCSD_RELEASE_SOURCE}" \
+  --qualification-receipt "${RESULT_ROOT}/gint-runtime-gate-receipt/receipt.json" \
+  --output "${RELEASE_ORCH}/plan.json"
+python "${CCSD_RELEASE_SOURCE}/benchmarks/cc/a100_water8/gint_release_gate.py" submit \
+  --plan "${RELEASE_ORCH}/plan.json" --execute \
+  --receipt "${RELEASE_ORCH}/submission.json"
+```
+
+After the submitted job is terminal, issue the write-once authorization. This
+requires the exact receipt-derived job name, `COMPLETED/0:0`, the pinned node,
+a performance-eligible result, and stable source and topology identities:
+
+```bash
+RELEASE_JOB_ID="$(python -c \
+  'import json,sys; print(json.load(open(sys.argv[1]))["job_id"])' \
+  "${RELEASE_ORCH}/submission.json")"
+python "${CCSD_RELEASE_SOURCE}/benchmarks/cc/a100_water8/gint_release_gate.py" accept \
+  --submission-receipt "${RELEASE_ORCH}/submission.json" \
+  --release-result "${RESULT_ROOT}/water2-gint-direct-cd-${RELEASE_JOB_ID}.json" \
+  --release-topology "${RESULT_ROOT}/topology-physical8-${RELEASE_JOB_ID}.json" \
+  --slurm-output "${CCSD_TASK_PATH}/logs/gint-gate-${RELEASE_JOB_ID}.log" \
+  --output "${RESULT_ROOT}/gint-release-acceptance/acceptance.json"
+export GINT_RELEASE_GATE_ACCEPTANCE="${RESULT_ROOT}/gint-release-acceptance/acceptance.json"
 ```
 
 The pin commits B's source digest to the receipt file hash, payload hash, A
@@ -912,7 +947,9 @@ payload digest in the release job name adds the same identity to the release
 allocation record. Replacing both receipt files, or replacing the pin without
 publishing a different B digest and manifest, fails closed. Only this second
 run from B on the matching qualification topology and current release
-allocation can set `performance_eligible=true`.
+allocation can set `performance_eligible=true`. G3 plans and G4
+authorization/submission additionally require the sealed acceptance and reject
+missing, pending, failed, moved, or digest-mismatched evidence.
 
 `gpu4pyscf.cc.gint_pair_columns.GINTAOPairColumnProvider` remains the slower
 restricted-task reference adapter for diagnostic comparison.

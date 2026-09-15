@@ -17,6 +17,29 @@ G3 = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(G3)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_g3_from_full_release_evidence_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep these G3 unit tests focused on downstream chain enforcement.
+
+    The production validator's complete submission/result/topology rebuild is
+    exercised with realistic v3 artifacts in ``test_gint_gate.py``.  The G3
+    fixtures below deliberately use compact synthetic evidence.
+    """
+
+    def rebuild_from_fixture(*, submission_receipt: Path, **_kwargs) -> dict:
+        task = submission_receipt.resolve().parents[2]
+        acceptance = (
+            task / "results/release-gate-acceptance/acceptance.json"
+        )
+        return json.loads(acceptance.read_text(encoding="utf-8"))
+
+    monkeypatch.setattr(
+        G3._g4._release_gate, "build_acceptance", rebuild_from_fixture,
+    )
+
+
 def _write_json(path: Path, value: dict) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -61,7 +84,56 @@ def _task_source_receipt(
         },
     }
     _write_json(source / "gpu4pyscf/cc/gint_release_pin.json", pin)
-    contract = G3._gint_contract(source, receipt, task)
+    manifest = _write_json(source.parent / "manifest.json", {"synthetic": True})
+    evidence_dir = task / "results/release-gate-evidence"
+    submission = _write_json(evidence_dir / "submission.json", {"job_id": "70002"})
+    result = _write_json(evidence_dir / "result.json", {"performance_eligible": True})
+    topology = _write_json(evidence_dir / "topology.json", {"node": node})
+    slurm_output = task / "logs/gint-gate-70002.log"
+    slurm_output.parent.mkdir(parents=True)
+    slurm_output.write_text("release accepted\n", encoding="utf-8")
+    release_gate = G3._g4._release_gate
+    acceptance_payload = {
+        "schema": release_gate.ACCEPTANCE_SCHEMA,
+        "created_utc": "2026-09-15T00:00:00+00:00",
+        "status": "accepted",
+        "performance_eligible": True,
+        "source": {
+            "root": str(source.resolve()),
+            "tree_sha256": source_digest,
+            "manifest": {
+                "path": str(manifest.resolve()),
+                "sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+            },
+        },
+        "qualification_receipt": {
+            "path": str(receipt.resolve()), "sha256": receipt_sha,
+            "payload_sha256": payload_sha,
+        },
+        "release_pin": {
+            "path": str((source / "gpu4pyscf/cc/gint_release_pin.json").resolve()),
+            "sha256": hashlib.sha256(
+                (source / "gpu4pyscf/cc/gint_release_pin.json").read_bytes()
+            ).hexdigest(),
+        },
+        "node": node,
+        "release_job": {"terminal_slurm": {
+            "job_id": "70002", "job_name": f"gint-release-{payload_sha}",
+            "partition": "mrigpu", "node": node,
+            "state": "COMPLETED", "exit_code": "0:0",
+        }},
+        "evidence": {
+            label: {"path": str(path.resolve()),
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+            for label, path in {
+                "submission": submission, "result": result,
+                "topology": topology, "slurm_output": slurm_output,
+            }.items()
+        },
+    }
+    acceptance = task / "results/release-gate-acceptance/acceptance.json"
+    release_gate.write_once_acceptance(acceptance, acceptance_payload)
+    contract = G3._gint_contract(source, receipt, acceptance, task)
     return task, source, receipt, contract
 
 
@@ -268,7 +340,9 @@ def test_plan_is_receipt_node_bound_and_names_scientific_limit(tmp_path: Path) -
     task, source, receipt, contract = _task_source_receipt(tmp_path)
     plan = G3.make_water2_plan(
         task_root=task, source_root=source,
-        gint_runtime_gate_receipt=receipt, run_id="g3-w2",
+        gint_runtime_gate_receipt=receipt,
+        gint_release_gate_acceptance=task / "results/release-gate-acceptance/acceptance.json",
+        run_id="g3-w2",
     )
     assert plan["node"] == contract["node"] == "compute-1-3"
     assert plan["eri_tolerances"] == [1e-4, 1e-6, 1e-8]
@@ -303,6 +377,9 @@ def test_plan_is_receipt_node_bound_and_names_scientific_limit(tmp_path: Path) -
         lambda plan: plan["jobs"][1]["exports"].pop("GINT_RUNTIME_GATE_RECEIPT"),
         lambda plan: plan["jobs"][1].update(depends_on=[]),
         lambda plan: plan["jobs"][0]["exports"].update(RR_EIG_CUTOFF="1e-6"),
+        lambda plan: plan["gint_release_gate_acceptance"].update(
+            sha256="0" * 64
+        ),
         lambda plan: plan["jobs"].pop(),
     ],
 )
@@ -310,7 +387,9 @@ def test_plan_tampering_fails_closed(tmp_path: Path, mutation) -> None:
     task, source, receipt, _ = _task_source_receipt(tmp_path)
     plan = G3.make_water2_plan(
         task_root=task, source_root=source,
-        gint_runtime_gate_receipt=receipt, run_id="tamper",
+        gint_runtime_gate_receipt=receipt,
+        gint_release_gate_acceptance=task / "results/release-gate-acceptance/acceptance.json",
+        run_id="tamper",
     )
     mutation(plan)
     with pytest.raises(G3.ContractError):
@@ -323,10 +402,14 @@ def test_gint_receipt_and_release_pin_must_be_one_lineage(tmp_path: Path) -> Non
     pin = json.loads(pin_path.read_text())
     pin["lineage"]["release_source_without_pin_sha256"] = "d" * 64
     _write_json(pin_path, pin)
-    with pytest.raises(G3.ContractError, match="lineage"):
+    with pytest.raises(G3.ContractError, match="acceptance|lineage"):
         G3.make_water2_plan(
             task_root=task, source_root=source,
-            gint_runtime_gate_receipt=receipt, run_id="bad-lineage",
+            gint_runtime_gate_receipt=receipt,
+            gint_release_gate_acceptance=(
+                task / "results/release-gate-acceptance/acceptance.json"
+            ),
+            run_id="bad-lineage",
         )
 
 
@@ -336,7 +419,9 @@ def test_submit_preview_is_reviewable_and_does_not_call_sbatch(
     task, source, receipt, _ = _task_source_receipt(tmp_path)
     plan = G3.make_water2_plan(
         task_root=task, source_root=source,
-        gint_runtime_gate_receipt=receipt, run_id="preview",
+        gint_runtime_gate_receipt=receipt,
+        gint_release_gate_acceptance=task / "results/release-gate-acceptance/acceptance.json",
+        run_id="preview",
     )
     monkeypatch.setattr(
         G3.subprocess, "check_output",
@@ -347,6 +432,33 @@ def test_submit_preview_is_reviewable_and_does_not_call_sbatch(
     assert len(output["jobs"]) == 12
     assert all(item["argv"][0:2] == ["sbatch", "--parsable"] for item in output["jobs"])
     assert "--dependency=afterok:" in output["jobs"][1]["shell_preview"]
+
+
+def test_g3_submit_revalidates_release_acceptance(
+    tmp_path: Path,
+) -> None:
+    task, source, receipt, contract = _task_source_receipt(tmp_path)
+    acceptance = Path(contract["release_gate_acceptance"]["path"])
+    plan = G3.make_water2_plan(
+        task_root=task, source_root=source,
+        gint_runtime_gate_receipt=receipt,
+        gint_release_gate_acceptance=acceptance,
+        run_id="acceptance-recheck",
+    )
+    sidecar = Path(str(acceptance) + ".sha256")
+    acceptance.parent.chmod(0o755)
+    acceptance.chmod(0o644)
+    sidecar.chmod(0o644)
+    payload = json.loads(acceptance.read_text())
+    payload["release_job"]["terminal_slurm"]["state"] = "PENDING"
+    acceptance.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    digest = hashlib.sha256(acceptance.read_bytes()).hexdigest()
+    sidecar.write_text(f"{digest}  {acceptance.name}\n")
+    acceptance.chmod(0o444)
+    sidecar.chmod(0o444)
+    acceptance.parent.chmod(0o555)
+    with pytest.raises(G3.ContractError, match="not accepted"):
+        G3.submit_plan(plan, execute=False)
 
 
 def test_tie_rule_anchors_at_loosest_and_prefers_tighter_within_three_percent() -> None:
@@ -376,7 +488,9 @@ def test_complete_analysis_is_i_track_and_does_not_unlock_water8(
     task, source, gint_receipt, _ = _task_source_receipt(tmp_path)
     plan = G3.make_water2_plan(
         task_root=task, source_root=source,
-        gint_runtime_gate_receipt=gint_receipt, run_id="analysis",
+        gint_runtime_gate_receipt=gint_receipt,
+        gint_release_gate_acceptance=task / "results/release-gate-acceptance/acceptance.json",
+        run_id="analysis",
     )
     submission, logical = _executed_receipt(tmp_path, plan)
     records = _record_set(plan, logical)
@@ -406,7 +520,9 @@ def test_missing_result_and_incomplete_cp_fragments_fail_closed(
     task, source, gint_receipt, _ = _task_source_receipt(tmp_path)
     plan = G3.make_water2_plan(
         task_root=task, source_root=source,
-        gint_runtime_gate_receipt=gint_receipt, run_id="negative",
+        gint_runtime_gate_receipt=gint_receipt,
+        gint_release_gate_acceptance=task / "results/release-gate-acceptance/acceptance.json",
+        run_id="negative",
     )
     submission, logical = _executed_receipt(tmp_path, plan)
     records = _record_set(plan, logical)
@@ -436,7 +552,9 @@ def test_projector_metadata_and_gint_consumer_binding_are_hard_gates(
     task, source, gint_receipt, _ = _task_source_receipt(tmp_path)
     plan = G3.make_water2_plan(
         task_root=task, source_root=source,
-        gint_runtime_gate_receipt=gint_receipt, run_id="projector",
+        gint_runtime_gate_receipt=gint_receipt,
+        gint_release_gate_acceptance=task / "results/release-gate-acceptance/acceptance.json",
+        run_id="projector",
     )
     submission, logical = _executed_receipt(tmp_path, plan)
     records = _record_set(plan, logical)
@@ -463,7 +581,9 @@ def test_records_cannot_permute_tolerances_between_planned_jobs(
     task, source, gint_receipt, _ = _task_source_receipt(tmp_path)
     plan = G3.make_water2_plan(
         task_root=task, source_root=source,
-        gint_runtime_gate_receipt=gint_receipt, run_id="tol-permutation",
+        gint_runtime_gate_receipt=gint_receipt,
+        gint_release_gate_acceptance=task / "results/release-gate-acceptance/acceptance.json",
+        run_id="tol-permutation",
     )
     submission, logical = _executed_receipt(tmp_path, plan)
     records = _record_set(plan, logical)
@@ -499,7 +619,9 @@ def test_cp_node_and_rr_cutoff_are_bound_to_each_logical_job(
     task, source, gint_receipt, _ = _task_source_receipt(tmp_path)
     plan = G3.make_water2_plan(
         task_root=task, source_root=source,
-        gint_runtime_gate_receipt=gint_receipt, run_id="cp-node",
+        gint_runtime_gate_receipt=gint_receipt,
+        gint_release_gate_acceptance=task / "results/release-gate-acceptance/acceptance.json",
+        run_id="cp-node",
     )
     submission, logical = _executed_receipt(tmp_path, plan)
     records = _record_set(plan, logical)
@@ -534,6 +656,7 @@ def test_g4_authorization_must_match_selected_eri_tol_and_receipt(tmp_path: Path
         "schema": G3._g4.GATE_SCHEMA,
         "case_id": "water4-tz",
         "source_tree_sha256": "a" * 64,
+        "gint_release_gate_acceptance": contract["release_gate_acceptance"],
         "sequence_complete": True,
         "advance_to_water8": True,
         "promotable_cutoffs": [1e-9],

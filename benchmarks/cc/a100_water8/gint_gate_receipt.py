@@ -678,7 +678,7 @@ def build_release_pin(
 def write_once_release_pin(
     output_path: str | os.PathLike[str], pin: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """Write a staging pin which must later be embedded in snapshot B."""
+    """Atomically publish a staging pin for later embedding in snapshot B."""
 
     if pin.get("schema") != RELEASE_PIN_SCHEMA:
         raise ValueError("release pin schema mismatch")
@@ -692,9 +692,64 @@ def write_once_release_pin(
         raise ValueError("release pin output path must not traverse symlinks")
     if not path.parent.is_dir():
         raise ValueError("release pin output directory does not exist")
+    qualification = pin.get("qualification_source")
+    if not isinstance(qualification, Mapping):
+        raise ValueError("release pin qualification source is missing")
+    qualification_value = qualification.get("root")
+    if not isinstance(qualification_value, str) or not qualification_value:
+        raise ValueError("release pin qualification source root is invalid")
     qualification_root = Path(
-        str((pin.get("qualification_source") or {}).get("root", ""))
-    ).resolve(strict=True)
+        os.path.abspath(os.path.expanduser(qualification_value))
+    )
+    if qualification_root.resolve(strict=True) != qualification_root:
+        raise ValueError("qualification source path must not traverse symlinks")
+    task_root = qualification_root.parent.parent.parent
+    try:
+        relative = qualification_root.relative_to(task_root / "snapshots")
+    except ValueError as exc:
+        raise ValueError("qualification source is outside task snapshots") from exc
+    expected_digest = qualification.get("tree_sha256")
+    if (
+        len(relative.parts) != 2
+        or relative.parts[1] != "source"
+        or relative.parts[0] != expected_digest
+    ):
+        raise ValueError(
+            "qualification source must be snapshots/<tree-sha256>/source"
+        )
+    actual_digest, _ = release_source_tree_digest(qualification_root)
+    if actual_digest != expected_digest:
+        raise ValueError("qualification source content differs from release pin")
+    for candidate in (qualification_root, *qualification_root.rglob("*")):
+        info = candidate.lstat()
+        if stat.S_ISLNK(info.st_mode):
+            raise ValueError(f"qualification source contains symlink {candidate}")
+        if info.st_mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH):
+            raise ValueError(f"qualification source contains writable path {candidate}")
+    manifest_file, manifest_bytes, manifest_stat = _regular_file(
+        qualification_root.parent / "manifest.json",
+        name="qualification source manifest",
+    )
+    if manifest_stat.st_mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH):
+        raise ValueError("qualification source manifest must be read-only")
+    manifest = _json_object(manifest_bytes, name="qualification source manifest")
+    normalization_errors = source_snapshot_normalization_errors(
+        manifest, source_root=qualification_root
+    )
+    if normalization_errors:
+        raise ValueError(
+            "qualification snapshot normalization is invalid: "
+            + "; ".join(normalization_errors)
+        )
+    if not all((
+        manifest_file == qualification_root.parent / "manifest.json",
+        _sha256_bytes(manifest_bytes) == qualification.get("manifest_sha256"),
+        manifest_stat.st_size == qualification.get("manifest_bytes"),
+        manifest.get("source") == str(qualification_root),
+        manifest.get("tree_sha256") == expected_digest,
+        manifest.get("immutable") is True,
+    )):
+        raise ValueError("qualification source manifest differs from release pin")
     approved_results = qualification_root.parent.parent.parent / "results"
     if not path.is_relative_to(approved_results):
         raise ValueError("release pin must be below the task results root")
@@ -703,7 +758,16 @@ def write_once_release_pin(
             dict(pin), indent=2, sort_keys=True, ensure_ascii=True, allow_nan=False
         ) + "\n"
     ).encode("utf-8")
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444)
+    if os.path.lexists(path):
+        raise FileExistsError(f"refusing to overwrite release pin {path}")
+    temporary = path.parent / (
+        f".{path.name}.tmp-{os.getpid()}-{os.urandom(8).hex()}"
+    )
+    descriptor = os.open(
+        temporary,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+        0o444,
+    )
     try:
         try:
             view = memoryview(encoded)
@@ -716,11 +780,23 @@ def write_once_release_pin(
             os.fchmod(descriptor, 0o444)
         finally:
             os.close(descriptor)
+        # link(2) publishes the complete inode only if the destination is
+        # absent.  This is the same-directory atomic commit point and never
+        # replaces a previously recovered pin.
+        os.link(temporary, path, follow_symlinks=False)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     except Exception:
-        if path.exists() and not path.is_symlink():
-            path.chmod(0o600)
-            path.unlink()
+        # If publication already happened, preserve the target for explicit
+        # recovery inspection.  Only the uniquely named private temporary is
+        # owned by this attempt.
         raise
+    finally:
+        if temporary.exists() and not temporary.is_symlink():
+            temporary.unlink()
     return {
         "release_pin": str(path),
         "release_pin_sha256": _sha256_bytes(encoded),
@@ -730,17 +806,31 @@ def write_once_release_pin(
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--result", required=True, type=Path)
-    parser.add_argument("--slurm-output", required=True, type=Path)
-    parser.add_argument("--receipt", required=True, type=Path)
-    parser.add_argument("--release-pin", required=True, type=Path)
+    commands = parser.add_subparsers(dest="command", required=True)
+    issue = commands.add_parser("issue")
+    issue.add_argument("--result", required=True, type=Path)
+    issue.add_argument("--slurm-output", required=True, type=Path)
+    issue.add_argument("--receipt", required=True, type=Path)
+    issue.add_argument("--release-pin", required=True, type=Path)
+    resume = commands.add_parser("resume-pin")
+    resume.add_argument("--receipt", required=True, type=Path)
+    resume.add_argument("--release-pin", required=True, type=Path)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    values = list(os.sys.argv[1:] if argv is None else argv)
+    # Preserve the original command line as the ``issue`` shorthand.
+    if not values or values[0].startswith("-"):
+        values.insert(0, "issue")
+    args = _parser().parse_args(values)
     if os.path.lexists(args.release_pin):
         raise FileExistsError(f"refusing to overwrite release pin {args.release_pin}")
+    if args.command == "resume-pin":
+        pin = build_release_pin(args.receipt)
+        pin_created = write_once_release_pin(args.release_pin, pin)
+        print(json.dumps(pin_created, sort_keys=True))
+        return 0
     payload = build_receipt_payload(args.result, args.slurm_output)
     created = write_once_receipt(args.receipt, payload)
     pin = build_release_pin(args.receipt)

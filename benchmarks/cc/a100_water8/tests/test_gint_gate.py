@@ -65,6 +65,24 @@ assert PROMOTION_SPEC is not None and PROMOTION_SPEC.loader is not None
 PROMOTION = importlib.util.module_from_spec(PROMOTION_SPEC)
 sys.modules[PROMOTION_SPEC.name] = PROMOTION
 PROMOTION_SPEC.loader.exec_module(PROMOTION)
+RELEASE_GATE_SPEC = importlib.util.spec_from_file_location(
+    "water8_gint_release_gate", ROOT / "gint_release_gate.py"
+)
+assert RELEASE_GATE_SPEC is not None and RELEASE_GATE_SPEC.loader is not None
+RELEASE_GATE = importlib.util.module_from_spec(RELEASE_GATE_SPEC)
+RELEASE_GATE_SPEC.loader.exec_module(RELEASE_GATE)
+G4_SPEC = importlib.util.spec_from_file_location(
+    "water8_rr_g4_for_release_chain", ROOT / "rr_g4_continue.py"
+)
+assert G4_SPEC is not None and G4_SPEC.loader is not None
+G4 = importlib.util.module_from_spec(G4_SPEC)
+G4_SPEC.loader.exec_module(G4)
+G3_SPEC = importlib.util.spec_from_file_location(
+    "water8_tight_cd_g3_for_release_chain", ROOT / "tight_cd_g3.py"
+)
+assert G3_SPEC is not None and G3_SPEC.loader is not None
+G3 = importlib.util.module_from_spec(G3_SPEC)
+G3_SPEC.loader.exec_module(G3)
 
 
 SOURCE_DIGEST = "a" * 64
@@ -1134,6 +1152,12 @@ def _materialize_qualification(
     helper_identity = _install_control_helper(task)
     assert helper_identity["status"] == "validated"
     (package_dir / "provider.py").write_text("QUALIFIED_SOURCE = True\n")
+    benchmark_dir = source / "benchmarks/cc/a100_water8"
+    benchmark_dir.mkdir(parents=True)
+    (benchmark_dir / "run_mtu_gint_gate.sbatch").write_text(
+        "#!/bin/bash\nexit 0\n"
+    )
+    (benchmark_dir / "gint_gate.py").write_text("# synthetic gate driver\n")
     if with_internal_link:
         link_dir = source / "builder"
         target_dir = source / "dockerfiles" / "manylinux"
@@ -3029,7 +3053,7 @@ def test_mtu_launcher_is_snapshot_aware_and_physical8_guarded():
     assert '"${TASK_ROOT}"/snapshots/*/source' in text
     assert 'RESULT_ROOT="${TASK_ROOT}/results/gint-gate"' in text
     assert "GINT_GATE_RESULT_ROOT must be the fixed path" in text
-    assert "#SBATCH --nodelist=compute-1-6" in text
+    assert "#SBATCH --nodelist=" not in text
     assert "--mode physical8" in text
     assert "--require-performance" in text
     assert '"${SCRIPT_DIR}/topology_guard.py"' in text
@@ -3039,6 +3063,338 @@ def test_mtu_launcher_is_snapshot_aware_and_physical8_guarded():
     assert "grouped selected-column prototype cannot consume" in text
     assert 'export CCSD_SCONTROL_PATH="${EXPECTED_SCONTROL_PATH}"' in text
     assert "control-tools/slurm-23.02.4-local-rpath-v1/lib" in text
+
+
+def _materialize_release_gate_acceptance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, Path | dict]:
+    evidence = _materialize_qualification(tmp_path)
+    task = tmp_path / "task"
+    source = evidence["release_source"]
+    receipt = evidence["receipt"]
+    orchestration = task / "results/release-gate-orchestration"
+    orchestration.mkdir()
+    plan = RELEASE_GATE.make_plan(
+        task_root=task, source_root=source, qualification_receipt=receipt,
+    )
+    plan_path = orchestration / "plan.json"
+    RELEASE_GATE._write_once_json(plan_path, plan)
+    monkeypatch.setattr(
+        RELEASE_GATE.subprocess, "check_output",
+        lambda *args, **kwargs: "70002\n",
+    )
+    submission = RELEASE_GATE.submit_plan(
+        plan, execute=True, plan_path=plan_path,
+    )
+    submission_path = orchestration / "submission.json"
+    RELEASE_GATE._write_once_json(submission_path, submission)
+
+    accepted_runtime = validate_runtime_performance_gate(
+        receipt, **evidence["arguments"]
+    )
+    topology_path = Path(evidence["arguments"]["release_topology_path"])
+    topology_sha = hashlib.sha256(topology_path.read_bytes()).hexdigest()
+    manifest_path = Path(evidence["manifest"])
+    manifest_sha = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    source_digest = source.parent.name
+    result = {
+        "schema": GATE.GINT_GATE_RESULT_SCHEMA,
+        "status": "completed",
+        "performance_eligible": True,
+        "gate_decision": {
+            "correctness_passed": True,
+            "qualification_passed": True,
+            "performance_eligible": True,
+        },
+        "source": {
+            "root": str(source),
+            "tree_sha256_at_start": source_digest,
+            "tree_sha256_at_end": source_digest,
+            "stable_during_run": True,
+            "snapshot": {
+                "manifest_path": str(manifest_path),
+                "manifest_sha256_at_start": manifest_sha,
+                "manifest_sha256_at_end": manifest_sha,
+                "stable_during_run": True,
+            },
+        },
+        "topology": {
+            "path": str(topology_path),
+            "sha256_at_start": topology_sha,
+            "sha256_at_end": topology_sha,
+            "passed": True,
+            "stable_during_run": True,
+        },
+        "provider": {
+            "performance_eligible": True,
+            "runtime_gate": accepted_runtime,
+        },
+    }
+    result_path = Path(submission["expected_outputs"]["result"])
+    result_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    result_path.chmod(0o444)
+    slurm_output = Path(submission["expected_outputs"]["slurm_output"])
+    slurm_output.write_text("release gate completed\n")
+    slurm_output.chmod(0o444)
+    terminal = {
+        "job_id": "70002",
+        "job_name": plan["contract"]["job_name"],
+        "partition": "mrigpu",
+        "node": plan["contract"]["node"],
+        "state": "COMPLETED",
+        "exit_code": "0:0",
+        "submit_utc": "2026-09-15T00:00:00",
+        "start_utc": "2026-09-15T00:00:01",
+        "end_utc": "2026-09-15T00:01:00",
+        "elapsed": "00:00:59",
+    }
+    return {
+        **evidence,
+        "task": task,
+        "plan": plan,
+        "plan_path": plan_path,
+        "submission": submission,
+        "submission_path": submission_path,
+        "result_path": result_path,
+        "topology_path": topology_path,
+        "slurm_output": slurm_output,
+        "terminal": terminal,
+    }
+
+
+def test_release_gate_submission_and_acceptance_are_node_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence = _materialize_release_gate_acceptance(tmp_path, monkeypatch)
+    plan = evidence["plan"]
+    assert "--nodelist=compute-1-6" in plan["sbatch_options"]
+    assert plan["contract"]["job_name"].startswith("gint-release-")
+    assert evidence["submission"]["argv"][0:2] == ["sbatch", "--parsable"]
+    payload = RELEASE_GATE.build_acceptance(
+        submission_receipt=evidence["submission_path"],
+        release_result=evidence["result_path"],
+        release_topology=evidence["topology_path"],
+        slurm_output=evidence["slurm_output"],
+        slurm_terminal=evidence["terminal"],
+    )
+    acceptance = (
+        evidence["task"] / "results/gint-release-acceptance/acceptance.json"
+    )
+    RELEASE_GATE.write_once_acceptance(acceptance, payload)
+    checked = RELEASE_GATE.validate_release_acceptance(
+        acceptance, task_root=evidence["task"],
+        source_root=evidence["release_source"],
+        qualification_receipt=evidence["receipt"],
+    )
+    assert checked["node"] == "compute-1-6"
+    assert checked["release_job_id"] == "70002"
+    assert stat.S_IMODE(acceptance.stat().st_mode) == 0o444
+    assert stat.S_IMODE(acceptance.parent.stat().st_mode) == 0o555
+    g4_contract = G4._accepted_receipt_contract(
+        evidence["release_source"], evidence["receipt"], acceptance,
+        task_root=evidence["task"],
+    )
+    assert g4_contract["release_gate_acceptance"]["sha256"] == checked["sha256"]
+    g3_plan = G3.make_water2_plan(
+        task_root=evidence["task"], source_root=evidence["release_source"],
+        gint_runtime_gate_receipt=evidence["receipt"],
+        gint_release_gate_acceptance=acceptance,
+        run_id="release-chain-e2e",
+    )
+    assert g3_plan["node"] == plan["contract"]["node"]
+    assert g3_plan["gint_release_gate_acceptance"]["sha256"] == checked["sha256"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("state", "PENDING"), ("state", "FAILED"), ("exit_code", "1:0"),
+     ("node", "compute-1-3"), ("job_name", "gint-release-forged")),
+)
+def test_release_gate_rejects_nonterminal_or_wrong_scheduler_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, value: str,
+) -> None:
+    evidence = _materialize_release_gate_acceptance(tmp_path, monkeypatch)
+    terminal = dict(evidence["terminal"])
+    terminal[field] = value
+    with pytest.raises(RELEASE_GATE.ContractError, match="terminal Slurm"):
+        RELEASE_GATE.build_acceptance(
+            submission_receipt=evidence["submission_path"],
+            release_result=evidence["result_path"],
+            release_topology=evidence["topology_path"],
+            slurm_output=evidence["slurm_output"],
+            slurm_terminal=terminal,
+        )
+
+
+def test_release_gate_rejects_performance_source_and_pin_tampering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence = _materialize_release_gate_acceptance(tmp_path, monkeypatch)
+    result_path = evidence["result_path"]
+    result = json.loads(result_path.read_text())
+    result["performance_eligible"] = False
+    _rewrite_readonly_json(result_path, result)
+    with pytest.raises(RELEASE_GATE.ContractError, match="performance eligibility"):
+        RELEASE_GATE.build_acceptance(
+            submission_receipt=evidence["submission_path"],
+            release_result=result_path,
+            release_topology=evidence["topology_path"],
+            slurm_output=evidence["slurm_output"],
+            slurm_terminal=evidence["terminal"],
+        )
+
+    result["performance_eligible"] = True
+    result["source"]["tree_sha256_at_end"] = "f" * 64
+    _rewrite_readonly_json(result_path, result)
+    with pytest.raises(RELEASE_GATE.ContractError, match="performance eligibility"):
+        RELEASE_GATE.build_acceptance(
+            submission_receipt=evidence["submission_path"],
+            release_result=result_path,
+            release_topology=evidence["topology_path"],
+            slurm_output=evidence["slurm_output"],
+            slurm_terminal=evidence["terminal"],
+        )
+
+    result["source"]["tree_sha256_at_end"] = (
+        evidence["release_source"].parent.name
+    )
+    _rewrite_readonly_json(result_path, result)
+    pin_path = evidence["release_pin"]
+    pin = json.loads(pin_path.read_text())
+    pin["release_runtime_contract"]["node"] = "compute-1-3"
+    _rewrite_readonly_json(pin_path, pin)
+    with pytest.raises(RELEASE_GATE.ContractError, match="pin|runtime contract"):
+        RELEASE_GATE.make_plan(
+            task_root=evidence["task"], source_root=evidence["release_source"],
+            qualification_receipt=evidence["receipt"],
+        )
+
+
+def test_release_acceptance_sidecar_cannot_bless_changed_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence = _materialize_release_gate_acceptance(tmp_path, monkeypatch)
+    payload = RELEASE_GATE.build_acceptance(
+        submission_receipt=evidence["submission_path"],
+        release_result=evidence["result_path"],
+        release_topology=evidence["topology_path"],
+        slurm_output=evidence["slurm_output"],
+        slurm_terminal=evidence["terminal"],
+    )
+    result = json.loads(evidence["result_path"].read_text())
+    result["performance_eligible"] = False
+    _rewrite_readonly_json(evidence["result_path"], result)
+    payload["evidence"]["result"]["sha256"] = hashlib.sha256(
+        evidence["result_path"].read_bytes()
+    ).hexdigest()
+    acceptance = (
+        evidence["task"] / "results/forged-release-acceptance/acceptance.json"
+    )
+    RELEASE_GATE.write_once_acceptance(acceptance, payload)
+    with pytest.raises(RELEASE_GATE.ContractError, match="evidence is invalid"):
+        RELEASE_GATE.validate_release_acceptance(
+            acceptance, task_root=evidence["task"],
+            source_root=evidence["release_source"],
+            qualification_receipt=evidence["receipt"],
+        )
+
+
+def test_release_acceptance_rehashes_bound_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence = _materialize_release_gate_acceptance(tmp_path, monkeypatch)
+    payload = RELEASE_GATE.build_acceptance(
+        submission_receipt=evidence["submission_path"],
+        release_result=evidence["result_path"],
+        release_topology=evidence["topology_path"],
+        slurm_output=evidence["slurm_output"],
+        slurm_terminal=evidence["terminal"],
+    )
+    acceptance = (
+        evidence["task"] / "results/source-recheck-acceptance/acceptance.json"
+    )
+    RELEASE_GATE.write_once_acceptance(acceptance, payload)
+    changed = evidence["release_source"] / "gpu4pyscf/lib/runtime_targets.py"
+    changed.chmod(0o644)
+    changed.write_text("value = 'changed after acceptance'\n")
+    changed.chmod(0o444)
+    with pytest.raises(RELEASE_GATE.ContractError, match="evidence is invalid"):
+        RELEASE_GATE.validate_release_acceptance(
+            acceptance, task_root=evidence["task"],
+            source_root=evidence["release_source"],
+            qualification_receipt=evidence["receipt"],
+        )
+
+
+def test_resume_pin_recovers_after_atomic_publication_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence = _materialize_qualification(tmp_path)
+    receipt = evidence["receipt"]
+    receipt_sha = hashlib.sha256(receipt.read_bytes()).hexdigest()
+    recovery_dir = tmp_path / "task/results/recovered-pin"
+    recovery_dir.mkdir()
+    output = recovery_dir / RECEIPT.RELEASE_PIN_RELATIVE_PATH.name
+    real_link = RECEIPT.os.link
+
+    def fail_link(*_args, **_kwargs):
+        raise OSError("injected atomic publication failure")
+
+    monkeypatch.setattr(RECEIPT.os, "link", fail_link)
+    with pytest.raises(OSError, match="injected atomic"):
+        RECEIPT.write_once_release_pin(
+            output, RECEIPT.build_release_pin(receipt)
+        )
+    assert not output.exists()
+    assert list(recovery_dir.iterdir()) == []
+    assert hashlib.sha256(receipt.read_bytes()).hexdigest() == receipt_sha
+
+    monkeypatch.setattr(RECEIPT.os, "link", real_link)
+    assert RECEIPT.main([
+        "resume-pin", "--receipt", str(receipt),
+        "--release-pin", str(output),
+    ]) == 0
+    assert json.loads(output.read_text()) == RECEIPT.build_release_pin(receipt)
+    assert stat.S_IMODE(output.stat().st_mode) == 0o444
+
+
+def test_resume_pin_rehashes_qualification_source(tmp_path: Path) -> None:
+    evidence = _materialize_qualification(tmp_path)
+    changed = (
+        evidence["qualification_source"] / "gpu4pyscf/lib/runtime_targets.py"
+    )
+    changed.chmod(0o644)
+    changed.write_text("value = 'changed before resume'\n")
+    changed.chmod(0o444)
+    output_dir = tmp_path / "task/results/rejected-source-pin"
+    output_dir.mkdir()
+    output = output_dir / RECEIPT.RELEASE_PIN_RELATIVE_PATH.name
+    with pytest.raises(ValueError, match="source content"):
+        RECEIPT.main([
+            "resume-pin", "--receipt", str(evidence["receipt"]),
+            "--release-pin", str(output),
+        ])
+    assert not output.exists()
+
+
+def test_resume_pin_rejects_changed_receipt_sidecar(
+    tmp_path: Path,
+) -> None:
+    evidence = _materialize_qualification(tmp_path)
+    receipt = evidence["receipt"]
+    sidecar = Path(str(receipt) + RECEIPT.RUNTIME_GATE_SIDECAR_SUFFIX)
+    sidecar.chmod(0o600)
+    sidecar.write_text("0" * 64 + f"  {receipt.name}\n")
+    sidecar.chmod(0o444)
+    output_dir = tmp_path / "task/results/rejected-pin"
+    output_dir.mkdir()
+    output = output_dir / RECEIPT.RELEASE_PIN_RELATIVE_PATH.name
+    with pytest.raises(ValueError, match="sidecar"):
+        RECEIPT.main([
+            "resume-pin", "--receipt", str(receipt),
+            "--release-pin", str(output),
+        ])
+    assert not output.exists()
 
 
 def test_dry_run_records_thresholds_and_does_not_write_output(tmp_path: Path):

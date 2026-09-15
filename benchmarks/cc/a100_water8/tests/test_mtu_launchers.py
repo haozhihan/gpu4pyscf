@@ -67,16 +67,16 @@ def test_strict_numa_launchers_reserve_all_physical_cores(name: str) -> None:
     assert "#SBATCH --hint=nomultithread" in text
 
 
-@pytest.mark.parametrize(
-    "name", ("run_mtu_gint_gate.sbatch", "run_mtu_gpu_tests.sbatch")
-)
-def test_candidate_validation_launchers_pin_fixed_mtu_node(name: str) -> None:
-    text = (ROOT / name).read_text(encoding="utf-8")
-
-    # Snapshot A/B gates and the GPU regression suite must execute on the
-    # fixed A100/EPYC target.  A command-line override is not sufficient for a
-    # future direct ``sbatch`` invocation, so keep the pin in each artifact.
+def test_candidate_gpu_regression_launcher_pins_fixed_mtu_node() -> None:
+    text = (ROOT / "run_mtu_gpu_tests.sbatch").read_text(encoding="utf-8")
     assert "#SBATCH --nodelist=compute-1-6" in text
+
+
+def test_gint_release_launcher_requires_dynamic_receipt_node_submitter() -> None:
+    text = (ROOT / "run_mtu_gint_gate.sbatch").read_text(encoding="utf-8")
+    submitter = (ROOT / "gint_release_gate.py").read_text(encoding="utf-8")
+    assert "#SBATCH --nodelist=" not in text
+    assert 'f"--nodelist={contract[\'node\']}"' in submitter
 
 
 @pytest.mark.parametrize(

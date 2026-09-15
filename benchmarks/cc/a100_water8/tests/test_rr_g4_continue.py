@@ -196,7 +196,9 @@ def test_write_once_failure_preserves_owned_inode(monkeypatch, tmp_path: Path) -
         rr_g4._exclusive_json(output, {"gate": "replacement"})
 
 
-def _write_receipt_and_pin(tmp_path: Path, node: str = "compute-1-3") -> tuple[Path, Path]:
+def _write_receipt_and_pin(
+    tmp_path: Path, node: str = "compute-1-3",
+) -> tuple[Path, Path, Path]:
     task = tmp_path / "task"
     source = task / "snapshots" / ("a" * 64) / "source"
     receipt = task / "results/gint/receipt.json"
@@ -227,11 +229,66 @@ def _write_receipt_and_pin(tmp_path: Path, node: str = "compute-1-3") -> tuple[P
     (source / "gpu4pyscf/cc/gint_release_pin.json").write_text(
         json.dumps(pin, indent=2, sort_keys=True) + "\n"
     )
-    return source, receipt
+    manifest = _write_read_only_json(
+        source.parent / "manifest.json", {"synthetic": True},
+    )
+    evidence_dir = task / "results/release-evidence"
+    evidence = {
+        "submission": _write_read_only_json(
+            evidence_dir / "submission.json", {"job_id": "70002"},
+        ),
+        "result": _write_read_only_json(
+            evidence_dir / "result.json", {"performance_eligible": True},
+        ),
+        "topology": _write_read_only_json(
+            evidence_dir / "topology.json", {"node": node},
+        ),
+    }
+    slurm_output = task / "logs/gint-gate-70002.log"
+    slurm_output.parent.mkdir(parents=True)
+    slurm_output.write_text("release accepted\n", encoding="utf-8")
+    evidence["slurm_output"] = slurm_output
+    release_gate = rr_g4._release_gate
+    acceptance_payload = {
+        "schema": release_gate.ACCEPTANCE_SCHEMA,
+        "created_utc": "2026-09-15T00:00:00+00:00",
+        "status": "accepted", "performance_eligible": True,
+        "source": {
+            "root": str(source.resolve()), "tree_sha256": "a" * 64,
+            "manifest": {
+                "path": str(manifest.resolve()),
+                "sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+            },
+        },
+        "qualification_receipt": {
+            "path": str(receipt.resolve()), "sha256": receipt_sha,
+            "payload_sha256": payload_sha,
+        },
+        "release_pin": {
+            "path": str((source / "gpu4pyscf/cc/gint_release_pin.json").resolve()),
+            "sha256": hashlib.sha256(
+                (source / "gpu4pyscf/cc/gint_release_pin.json").read_bytes()
+            ).hexdigest(),
+        },
+        "node": node,
+        "release_job": {"terminal_slurm": {
+            "job_id": "70002", "job_name": f"gint-release-{payload_sha}",
+            "partition": "mrigpu", "node": node,
+            "state": "COMPLETED", "exit_code": "0:0",
+        }},
+        "evidence": {
+            label: {"path": str(path.resolve()),
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+            for label, path in evidence.items()
+        },
+    }
+    acceptance = task / "results/release-acceptance/acceptance.json"
+    release_gate.write_once_acceptance(acceptance, acceptance_payload)
+    return source, receipt, acceptance
 
 
 def test_receipt_node_comes_from_matching_receipt_and_release_pin(tmp_path: Path) -> None:
-    source, receipt = _write_receipt_and_pin(tmp_path, "compute-1-3")
+    source, receipt, acceptance = _write_receipt_and_pin(tmp_path, "compute-1-3")
     contract = rr_g4._receipt_contract(source, receipt)
     assert contract["node"] == "compute-1-3"
 
@@ -243,12 +300,66 @@ def test_receipt_node_comes_from_matching_receipt_and_release_pin(tmp_path: Path
         rr_g4._receipt_contract(source, receipt)
 
 
+def _rewrite_acceptance(path: Path, mutation) -> None:
+    directory = path.parent
+    sidecar = Path(str(path) + ".sha256")
+    directory.chmod(0o755)
+    path.chmod(0o644)
+    sidecar.chmod(0o644)
+    payload = json.loads(path.read_text())
+    mutation(payload)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    sidecar.write_text(f"{digest}  {path.name}\n")
+    path.chmod(0o444)
+    sidecar.chmod(0o444)
+    directory.chmod(0o555)
+
+
+@pytest.mark.parametrize(
+    ("label", "mutation"),
+    [
+        ("pending", lambda value: value["release_job"]["terminal_slurm"].update(
+            state="PENDING"
+        )),
+        ("failed", lambda value: value["release_job"]["terminal_slurm"].update(
+            state="FAILED", exit_code="1:0"
+        )),
+        ("node", lambda value: value.update(node="compute-1-0")),
+        ("source", lambda value: value["source"].update(tree_sha256="f" * 64)),
+        ("receipt", lambda value: value["qualification_receipt"].update(
+            sha256="e" * 64
+        )),
+    ],
+)
+def test_g4_refuses_forged_or_nonterminal_release_acceptance(
+    tmp_path: Path, label: str, mutation,
+) -> None:
+    source, receipt, acceptance = _write_receipt_and_pin(tmp_path)
+    if label == "missing":
+        acceptance.unlink()
+    else:
+        _rewrite_acceptance(acceptance, mutation)
+    with pytest.raises(rr_g4.ContractError, match="not accepted|differs"):
+        rr_g4._accepted_receipt_contract(source, receipt, acceptance)
+
+
+def test_g4_requires_release_acceptance_cli_argument(tmp_path: Path) -> None:
+    source, receipt, _ = _write_receipt_and_pin(tmp_path)
+    with pytest.raises(SystemExit):
+        rr_g4.main([
+            "receipt-node", "--source-root", str(source),
+            "--gint-runtime-gate-receipt", str(receipt),
+        ])
+
+
 def test_submitter_uses_only_standard_receipt_compatible_launcher() -> None:
     text = (ROOT / "submit_mtu_rr_g4_water4.sh").read_text(encoding="utf-8")
     for required in (
         "run_mtu_benchmark.sbatch", "receipt-node", "authorize",
         "--nodes=1", "--ntasks=1", "--gres=gpu:nvidia:1",
         '--nodelist="${NODE}"', "GINT_RUNTIME_GATE_RECEIPT",
+        "GINT_RELEASE_GATE_ACCEPTANCE",
         "--max-cycle 1", "--skip-checkpoint",
         "RUN_FULL_SPACE_DIAGNOSTIC=1",
         "refusing to reuse output directory",
@@ -285,8 +396,18 @@ class _SyntheticG4Chain:
         rank_1e9: int = 2500, rank_1e11: int = 2800,
     ) -> None:
         self.node = "compute-1-3"
-        self.source, self.receipt = _write_receipt_and_pin(tmp_path, self.node)
+        self.source, self.receipt, self.acceptance = _write_receipt_and_pin(
+            tmp_path, self.node
+        )
         self.task = self.source.parents[2]
+        # Full release-evidence reconstruction is covered by test_gint_gate.py;
+        # these compact fixtures isolate the G4 sequence and science gates.
+        monkeypatch.setattr(
+            rr_g4._release_gate, "build_acceptance",
+            lambda **_kwargs: json.loads(
+                self.acceptance.read_text(encoding="utf-8")
+            ),
+        )
         self.results = self.task / "results"
         self.chain_dir = self.results / "rr-g4-water4/synthetic"
         self.chain_dir.mkdir(parents=True)
@@ -462,6 +583,7 @@ class _SyntheticG4Chain:
             "--task-root", str(self.task),
             "--source-root", str(self.source),
             "--gint-runtime-gate-receipt", str(self.receipt),
+            "--gint-release-gate-acceptance", str(self.acceptance),
             "--output", str(self.spectrum),
             "--oracle-record", str(self.oracle),
             "--probe-record", str(self.probe_1e9),
@@ -479,6 +601,7 @@ class _SyntheticG4Chain:
             "--task-root", str(self.task),
             "--source-root", str(self.source),
             "--gint-runtime-gate-receipt", str(self.receipt),
+            "--gint-release-gate-acceptance", str(self.acceptance),
             "--output", str(output),
             "--rr-eig-cutoff", str(cutoff),
             "--spectrum-summary", str(self.spectrum),
@@ -500,6 +623,7 @@ class _SyntheticG4Chain:
             "--task-root", str(self.task),
             "--source-root", str(self.source),
             "--gint-runtime-gate-receipt", str(self.receipt),
+            "--gint-release-gate-acceptance", str(self.acceptance),
             "--stage", stage,
             "--rr-eig-cutoff", str(cutoff),
             "--spectrum-summary", str(self.spectrum),
@@ -523,6 +647,7 @@ class _SyntheticG4Chain:
             "--task-root", str(self.task),
             "--source-root", str(self.source),
             "--gint-runtime-gate-receipt", str(self.receipt),
+            "--gint-release-gate-acceptance", str(self.acceptance),
             "--output", str(output),
             "--rr-eig-cutoff", str(cutoff),
             "--spectrum-summary", str(self.spectrum),

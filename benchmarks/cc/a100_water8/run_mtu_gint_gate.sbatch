@@ -2,7 +2,6 @@
 #SBATCH --job-name=gint-water2-gate
 #SBATCH --account=mri
 #SBATCH --partition=mrigpu
-#SBATCH --nodelist=compute-1-6
 #SBATCH --gres=gpu:nvidia:1
 #SBATCH --gres-flags=enforce-binding
 #SBATCH --cpus-per-task=64

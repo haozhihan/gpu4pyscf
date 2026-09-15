@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -47,6 +48,19 @@ RUNTIME_CONTRACT_SCHEMA = (
 SPECTRUM_SCHEMA = "gpu4pyscf.rr-g4-water4-spectrum.v2"
 PROBE_SCHEMA = "gpu4pyscf.rr-g4-water4-probe.v2"
 GATE_SCHEMA = "gpu4pyscf.rr-g4-water4-gate.v2"
+
+
+def _load_release_gate() -> Any:
+    path = Path(__file__).resolve().with_name("gint_release_gate.py")
+    spec = importlib.util.spec_from_file_location("rr_g4_release_gate", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load gint_release_gate.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_release_gate = _load_release_gate()
 
 
 class ContractError(RuntimeError):
@@ -202,6 +216,36 @@ def _receipt_contract(
         "release_pin_path": str(pin_path),
         "release_pin_sha256": _sha256(pin_path),
     }
+
+
+def _accepted_receipt_contract(
+    source_root: Path, receipt_path: Path, acceptance_path: Path, *,
+    task_root: Path | None = None,
+) -> dict[str, Any]:
+    """Require the post-release terminal acceptance before any G4 work."""
+
+    source = source_root.expanduser().resolve(strict=True)
+    task = (
+        source.parent.parent.parent if task_root is None
+        else task_root.expanduser().resolve(strict=True)
+    )
+    receipt = _receipt_contract(source, receipt_path, task_root=task)
+    try:
+        accepted = _release_gate.validate_release_acceptance(
+            acceptance_path, task_root=task, source_root=source,
+            qualification_receipt=receipt_path,
+        )
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise ContractError(f"selected-GINT release gate is not accepted: {exc}") from exc
+    if not all((
+        accepted.get("node") == receipt["node"],
+        accepted.get("receipt_sha256") == receipt["sha256"],
+        accepted.get("receipt_payload_sha256") == receipt["payload_sha256"],
+        accepted.get("release_pin_sha256") == receipt["release_pin_sha256"],
+        accepted.get("source_tree_sha256") == source.parent.name,
+    )):
+        raise ContractError("release-gate acceptance differs from receipt/source")
+    return {**receipt, "release_gate_acceptance": accepted}
 
 
 def query_terminal_slurm(job_id: str) -> dict[str, str]:
@@ -517,6 +561,8 @@ def _validate_spectrum(
         or payload.get("source", {}).get("snapshot_root") != str(source_root.parent)
         or payload.get("gint_runtime_gate_receipt", {}).get("sha256")
         != receipt["sha256"]
+        or payload.get("gint_release_gate_acceptance", {}).get("sha256")
+        != receipt["release_gate_acceptance"]["sha256"]
     ):
         raise ContractError("invalid or mismatched WATER4 spectrum summary")
     probes = payload.get("probes")
@@ -561,7 +607,10 @@ def _matching_probe(
 def _spectrum(args: argparse.Namespace) -> int:
     task = args.task_root.resolve(strict=True)
     source = args.source_root.resolve(strict=True)
-    receipt = _receipt_contract(source, args.gint_runtime_gate_receipt, task_root=task)
+    receipt = _accepted_receipt_contract(
+        source, args.gint_runtime_gate_receipt,
+        args.gint_release_gate_acceptance, task_root=task,
+    )
     output = _output_file(args.output, task_root=task)
     oracle, oracle_evidence = _record_evidence(
         args.oracle_record, task_root=task, source_root=source,
@@ -602,6 +651,7 @@ def _spectrum(args: argparse.Namespace) -> int:
             "evidence": oracle_evidence,
         },
         "gint_runtime_gate_receipt": receipt,
+        "gint_release_gate_acceptance": receipt["release_gate_acceptance"],
         "probes": probes,
         "decision": "converge 1e-9 first; follow each gate exactly",
     }
@@ -613,7 +663,10 @@ def _spectrum(args: argparse.Namespace) -> int:
 def _probe(args: argparse.Namespace) -> int:
     task = args.task_root.resolve(strict=True)
     source = args.source_root.resolve(strict=True)
-    receipt = _receipt_contract(source, args.gint_runtime_gate_receipt, task_root=task)
+    receipt = _accepted_receipt_contract(
+        source, args.gint_runtime_gate_receipt,
+        args.gint_release_gate_acceptance, task_root=task,
+    )
     spectrum, spectrum_path = _validate_spectrum(
         args.spectrum_summary, task_root=task, source_root=source, receipt=receipt,
     )
@@ -705,7 +758,10 @@ def _diagnostic_gate(
 def _gate(args: argparse.Namespace) -> int:
     task = args.task_root.resolve(strict=True)
     source = args.source_root.resolve(strict=True)
-    receipt = _receipt_contract(source, args.gint_runtime_gate_receipt, task_root=task)
+    receipt = _accepted_receipt_contract(
+        source, args.gint_runtime_gate_receipt,
+        args.gint_release_gate_acceptance, task_root=task,
+    )
     spectrum, spectrum_path = _validate_spectrum(
         args.spectrum_summary, task_root=task, source_root=source, receipt=receipt,
     )
@@ -856,6 +912,7 @@ def _gate(args: argparse.Namespace) -> int:
             None if custom_path is None else _sha256(custom_path)
         ),
         "result_evidence": evidence,
+        "gint_release_gate_acceptance": receipt["release_gate_acceptance"],
     }
     _exclusive_json(output, payload)
     print(json.dumps({
@@ -866,7 +923,10 @@ def _gate(args: argparse.Namespace) -> int:
 
 
 def _receipt_node(args: argparse.Namespace) -> int:
-    contract = _receipt_contract(args.source_root, args.gint_runtime_gate_receipt)
+    contract = _accepted_receipt_contract(
+        args.source_root, args.gint_runtime_gate_receipt,
+        args.gint_release_gate_acceptance,
+    )
     print(contract["node"])
     return 0
 
@@ -876,7 +936,10 @@ def _authorize(args: argparse.Namespace) -> int:
 
     task = args.task_root.resolve(strict=True)
     source = args.source_root.resolve(strict=True)
-    receipt = _receipt_contract(source, args.gint_runtime_gate_receipt, task_root=task)
+    receipt = _accepted_receipt_contract(
+        source, args.gint_runtime_gate_receipt,
+        args.gint_release_gate_acceptance, task_root=task,
+    )
     spectrum, spectrum_path = _validate_spectrum(
         args.spectrum_summary, task_root=task, source_root=source, receipt=receipt,
     )
@@ -926,6 +989,7 @@ def _parser() -> argparse.ArgumentParser:
     node = commands.add_parser("receipt-node")
     node.add_argument("--source-root", type=Path, required=True)
     node.add_argument("--gint-runtime-gate-receipt", type=Path, required=True)
+    node.add_argument("--gint-release-gate-acceptance", type=Path, required=True)
     node.set_defaults(handler=_receipt_node)
 
     authorize = commands.add_parser("authorize")
@@ -933,6 +997,9 @@ def _parser() -> argparse.ArgumentParser:
     authorize.add_argument("--source-root", type=Path, required=True)
     authorize.add_argument(
         "--gint-runtime-gate-receipt", type=Path, required=True,
+    )
+    authorize.add_argument(
+        "--gint-release-gate-acceptance", type=Path, required=True,
     )
     authorize.add_argument("--stage", choices=("probe", "converge"), required=True)
     authorize.add_argument("--rr-eig-cutoff", type=float, required=True)
@@ -945,6 +1012,7 @@ def _parser() -> argparse.ArgumentParser:
     common.add_argument("--task-root", type=Path, required=True)
     common.add_argument("--source-root", type=Path, required=True)
     common.add_argument("--gint-runtime-gate-receipt", type=Path, required=True)
+    common.add_argument("--gint-release-gate-acceptance", type=Path, required=True)
     common.add_argument("--output", type=Path, required=True)
     spectrum = commands.add_parser("spectrum", parents=[common])
     spectrum.add_argument("--oracle-record", type=Path, required=True)

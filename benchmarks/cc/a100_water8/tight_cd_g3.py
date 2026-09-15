@@ -208,13 +208,14 @@ def _source_digest(source_root: Path, task_root: Path) -> str:
 
 
 def _gint_contract(
-    source_root: Path, receipt_path: Path, task_root: Path,
+    source_root: Path, receipt_path: Path, acceptance_path: Path,
+    task_root: Path,
 ) -> dict[str, Any]:
-    """Validate the external v2 receipt, sidecar, release pin, and node."""
+    """Validate receipt/pin lineage and the completed release acceptance."""
 
     try:
-        contract = _g4._receipt_contract(
-            source_root, receipt_path, task_root=task_root,
+        contract = _g4._accepted_receipt_contract(
+            source_root, receipt_path, acceptance_path, task_root=task_root,
         )
     except (OSError, ValueError, RuntimeError) as exc:
         raise ContractError(f"invalid selected-GINT release receipt: {exc}") from exc
@@ -269,6 +270,8 @@ def _analysis_receipt_identity_matches(
         binding.get("receipt_payload_sha256") == receipt_evidence.get("payload_sha256"),
         binding.get("plan_path") == payload.get("plan_path"),
         binding.get("plan_payload_sha256") == payload.get("plan_payload_sha256"),
+        binding.get("release_gate_acceptance_sha256")
+        == payload.get("gint_release_gate_acceptance", {}).get("sha256"),
     ))
 
 
@@ -285,6 +288,8 @@ def _require_prior(
         or payload.get("source_tree_sha256") != source_digest
         or payload.get("gint_release_receipt", {}).get("sha256")
         != gint_contract.get("sha256")
+        or payload.get("gint_release_gate_acceptance", {}).get("sha256")
+        != gint_contract.get("release_gate_acceptance", {}).get("sha256")
     ):
         raise ContractError(f"{stage} analysis identity is invalid")
     ready_key = "ready_for_water4" if stage == "water2" else "ready_for_g4"
@@ -297,6 +302,8 @@ def _require_prior(
         or receipt["payload"].get("source_tree_sha256") != source_digest
         or receipt["payload"].get("gint_release_receipt", {}).get("sha256")
         != gint_contract.get("sha256")
+        or receipt["payload"].get("gint_release_gate_acceptance", {}).get("sha256")
+        != gint_contract.get("release_gate_acceptance", {}).get("sha256")
         or not _analysis_receipt_identity_matches(payload, receipt)
     ):
         raise ContractError(f"{stage} analysis and receipt are not one chain")
@@ -313,6 +320,8 @@ def _require_g4_authorization(
         gate.get("schema") != _g4.GATE_SCHEMA
         or gate.get("case_id") != "water4-tz"
         or gate.get("source_tree_sha256") != source_digest
+        or gate.get("gint_release_gate_acceptance", {}).get("sha256")
+        != gint_contract.get("release_gate_acceptance", {}).get("sha256")
         or gate.get("sequence_complete") is not True
         or gate.get("advance_to_water8") is not True
         or not gate.get("promotable_cutoffs")
@@ -483,6 +492,7 @@ def _stage_jobs(
 
 def _base_plan(
     *, task_root: Path, source_root: Path, gint_runtime_gate_receipt: Path,
+    gint_release_gate_acceptance: Path,
     run_id: str, stage: str, tolerances: Sequence[float],
     prerequisite: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -491,7 +501,9 @@ def _base_plan(
     task = task_root.expanduser().resolve(strict=True)
     source = source_root.expanduser().resolve(strict=True)
     digest = _source_digest(source, task)
-    gint = _gint_contract(source, gint_runtime_gate_receipt, task)
+    gint = _gint_contract(
+        source, gint_runtime_gate_receipt, gint_release_gate_acceptance, task,
+    )
     receipt = Path(gint["path"])
     jobs, result_root = _stage_jobs(
         task=task, source=source, run_id=run_id, stage=stage,
@@ -511,6 +523,7 @@ def _base_plan(
         "rr_eig_cutoff": RR_EIG_CUTOFF,
         "result_root": str(result_root),
         "gint_release_receipt": gint,
+        "gint_release_gate_acceptance": gint["release_gate_acceptance"],
         "jobs": jobs,
         "prerequisite": prerequisite,
         "scientific_boundary": {
@@ -539,24 +552,29 @@ def _base_plan(
 
 def make_water2_plan(
     *, task_root: Path, source_root: Path,
-    gint_runtime_gate_receipt: Path, run_id: str,
+    gint_runtime_gate_receipt: Path, gint_release_gate_acceptance: Path,
+    run_id: str,
 ) -> dict[str, Any]:
     return _base_plan(
         task_root=task_root, source_root=source_root,
         gint_runtime_gate_receipt=gint_runtime_gate_receipt,
+        gint_release_gate_acceptance=gint_release_gate_acceptance,
         run_id=run_id, stage="water2", tolerances=ERI_TOLERANCES,
     )
 
 
 def make_water4_plan(
     *, task_root: Path, source_root: Path,
-    gint_runtime_gate_receipt: Path, run_id: str,
+    gint_runtime_gate_receipt: Path, gint_release_gate_acceptance: Path,
+    run_id: str,
     water2_analysis: Path, water2_receipt: Path,
 ) -> dict[str, Any]:
     task = task_root.expanduser().resolve(strict=True)
     source = source_root.expanduser().resolve(strict=True)
     digest = _source_digest(source, task)
-    gint = _gint_contract(source, gint_runtime_gate_receipt, task)
+    gint = _gint_contract(
+        source, gint_runtime_gate_receipt, gint_release_gate_acceptance, task,
+    )
     analysis, receipt = _require_prior(
         water2_analysis, water2_receipt, stage="water2",
         source_digest=digest, gint_contract=gint,
@@ -569,6 +587,9 @@ def make_water4_plan(
     return _base_plan(
         task_root=task, source_root=source,
         gint_runtime_gate_receipt=Path(gint["path"]),
+        gint_release_gate_acceptance=Path(
+            gint["release_gate_acceptance"]["path"]
+        ),
         run_id=run_id, stage="water4", tolerances=ERI_TOLERANCES,
         prerequisite=prerequisite,
     )
@@ -576,14 +597,17 @@ def make_water4_plan(
 
 def make_water8_plan(
     *, task_root: Path, source_root: Path,
-    gint_runtime_gate_receipt: Path, run_id: str,
+    gint_runtime_gate_receipt: Path, gint_release_gate_acceptance: Path,
+    run_id: str,
     water4_analysis: Path, water4_receipt: Path,
     g4_authorization: Path,
 ) -> dict[str, Any]:
     task = task_root.expanduser().resolve(strict=True)
     source = source_root.expanduser().resolve(strict=True)
     digest = _source_digest(source, task)
-    gint = _gint_contract(source, gint_runtime_gate_receipt, task)
+    gint = _gint_contract(
+        source, gint_runtime_gate_receipt, gint_release_gate_acceptance, task,
+    )
     analysis, receipt = _require_prior(
         water4_analysis, water4_receipt, stage="water4",
         source_digest=digest, gint_contract=gint,
@@ -605,6 +629,9 @@ def make_water8_plan(
     return _base_plan(
         task_root=task, source_root=source,
         gint_runtime_gate_receipt=Path(gint["path"]),
+        gint_release_gate_acceptance=Path(
+            gint["release_gate_acceptance"]["path"]
+        ),
         run_id=run_id, stage="water8", tolerances=(float(selected),),
         prerequisite=prerequisite,
     )
@@ -616,6 +643,9 @@ def _regenerate_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
         "source_root": Path(str(plan["source_root"])),
         "gint_runtime_gate_receipt": Path(
             str(plan["gint_release_receipt"]["path"])
+        ),
+        "gint_release_gate_acceptance": Path(
+            str(plan["gint_release_gate_acceptance"]["path"])
         ),
         "run_id": str(plan["run_id"]),
     }
@@ -753,6 +783,7 @@ def submit_plan(
         "run_id": plan["run_id"],
         "source_tree_sha256": plan["source_tree_sha256"],
         "gint_release_receipt": plan["gint_release_receipt"],
+        "gint_release_gate_acceptance": plan["gint_release_gate_acceptance"],
         "plan_path": None if plan_path is None else str(plan_path.resolve()),
         "plan_payload_sha256": _payload_sha256(plan),
         "jobs": commands,
@@ -777,6 +808,8 @@ def _validate_submission_receipt(receipt: Any) -> tuple[dict[str, Any], dict[str
         or receipt.get("source_tree_sha256") != plan.get("source_tree_sha256")
         or receipt.get("gint_release_receipt", {}).get("sha256")
         != plan.get("gint_release_receipt", {}).get("sha256")
+        or receipt.get("gint_release_gate_acceptance", {}).get("sha256")
+        != plan.get("gint_release_gate_acceptance", {}).get("sha256")
     ):
         raise ContractError("G3 submission receipt differs from its plan")
     expected = [job["id"] for job in plan["jobs"]]
@@ -1373,6 +1406,7 @@ def analyze_stage(
         "node": plan["node"],
         "rr_eig_cutoff": RR_EIG_CUTOFF,
         "gint_release_receipt": plan["gint_release_receipt"],
+        "gint_release_gate_acceptance": plan["gint_release_gate_acceptance"],
         "grid_complete": evidence_complete,
         "records_loaded": len(records),
         "rows": rows,
@@ -1384,6 +1418,9 @@ def analyze_stage(
             "plan_path": receipt_evidence["payload"]["plan_path"],
             "plan_payload_sha256": receipt_evidence["payload"]["plan_payload_sha256"],
             "logical_job_ids": logical,
+            "release_gate_acceptance_sha256": plan[
+                "gint_release_gate_acceptance"
+            ]["sha256"],
         },
         "scientific_boundary": plan["scientific_boundary"],
         "claim_state": {
@@ -1404,6 +1441,7 @@ def _parser() -> argparse.ArgumentParser:
     plan.add_argument("--task-root", type=Path, required=True)
     plan.add_argument("--source-root", type=Path, required=True)
     plan.add_argument("--gint-runtime-gate-receipt", type=Path, required=True)
+    plan.add_argument("--gint-release-gate-acceptance", type=Path, required=True)
     plan.add_argument("--run-id", required=True)
     plan.add_argument("--stage", choices=("water2", "water4", "water8"), required=True)
     plan.add_argument("--prior-analysis", type=Path)
@@ -1427,6 +1465,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         common = {
             "task_root": args.task_root, "source_root": args.source_root,
             "gint_runtime_gate_receipt": args.gint_runtime_gate_receipt,
+            "gint_release_gate_acceptance": args.gint_release_gate_acceptance,
             "run_id": args.run_id,
         }
         if args.stage == "water2":
