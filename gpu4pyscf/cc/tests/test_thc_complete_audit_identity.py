@@ -1,9 +1,10 @@
-"""Numerical identity gate for the complete Algorithms 1--10 audit.
+"""Numerical identity gates for the complete Algorithms 1--10 audit.
 
-The fixture uses the complete occupied--virtual pair basis for both the
-amplitude and ERI THC representations.  Nothing is fitted: every RR
-projector, doubles amplitude, and ``ovov`` integral can therefore be compared
-directly with the independent RR/CD equation implementation in FP64.
+One fixture uses the complete occupied--virtual pair basis for both the
+amplitude and ERI THC representations.  A second fits a generic RR projector
+at rank below ``OV``, applies the Eq. 11--14 symmetric orthogonalization, and
+uses the reconstructed non-one-hot projector as an independent RR/CD equation
+oracle.  Both routes compare complete singles and doubles numerators in FP64.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from gpu4pyscf.cc.thc_complete_audit import (
     assemble_complete_thc_ccsd_audit,
 )
 from gpu4pyscf.cc.thc_eri import ERITHCFactors
+from gpu4pyscf.cc.thc_factorization import fit_weighted_thc_projector
 from gpu4pyscf.cc.thc_fhat import build_t1_transformed_fhat
 from gpu4pyscf.cc.thc_residual import rr_residual_algorithms_1_3
 
@@ -158,6 +160,110 @@ def _full_pair_problem(
         "nvir": nvir,
         "oracle_arguments": oracle_arguments,
         "audit_arguments": audit_arguments,
+    }
+
+
+def _inexact_orthogonalized_cp_problem(
+    seed: int,
+    *,
+    nocc: int = 3,
+    nvir: int = 3,
+    rr_rank: int = 3,
+    thc_rank: int = 4,
+):
+    """Return a compressed, dense CP gauge after the Eq. 11--14 flow.
+
+    The ALS target is a generic semi-unitary RR projector.  Its deliberately
+    truncated CP fit is then symmetrically orthogonalized by
+    :func:`fit_weighted_thc_projector`.  The independent equation oracle uses
+    the *reconstructed* semi-unitary projector, rather than the pre-fit
+    target.  This isolates the complete-equation identity from CP fitting
+    error while exercising the same non-full-pair factors that an inexact
+    amplitude-THC calculation would consume.  The ERI side deliberately stays
+    at its analytic full-pair/CD endpoint so this gate diagnoses amplitude
+    compression alone.
+    """
+
+    pair_dimension = nocc * nvir
+    rng = np.random.default_rng(seed + 100_000)
+
+    target_vectors, _ = np.linalg.qr(
+        rng.normal(size=(pair_dimension, rr_rank))
+    )
+    eigenvalues = -np.linspace(1.3, 0.35, rr_rank)
+    target_projector = RRProjector(
+        target_vectors,
+        eigenvalues,
+        cutoff=1e-6,
+        full_dimension=pair_dimension,
+        source="generic-inexact-cp-target",
+    )
+    factors = fit_weighted_thc_projector(
+        target_projector,
+        nocc,
+        nvir,
+        thc_rank=thc_rank,
+        fit_tolerance=0.0,
+        orthogonality_cutoff=1e-12,
+        orthogonality_tolerance=1e-12,
+        max_iterations=40,
+        als_convergence_tolerance=0.0,
+        ridge=1e-12,
+        seed=seed,
+        allow_unconverged=True,
+    )
+
+    pair_y = np.einsum(
+        "iW,aW->iaW", factors.y_occ, factors.y_vir
+    ).reshape(pair_dimension, thc_rank)
+    reconstructed_vectors = pair_y @ factors.tau.T
+    effective_projector = RRProjector(
+        reconstructed_vectors,
+        eigenvalues,
+        cutoff=target_projector.cutoff,
+        full_dimension=pair_dimension,
+        source="eq11-14-orthogonalized-inexact-cp",
+    )
+    rr_core = rng.normal(size=(rr_rank, rr_rank))
+    rr_core = (rr_core + rr_core.T) * 0.035
+    doubles = RRDoubles(
+        effective_projector, rr_core, nocc=nocc, nvir=nvir
+    )
+    amplitude_core = factors.tau.T @ rr_core @ factors.tau
+    amplitude_core = (amplitude_core + amplitude_core.T) * 0.5
+
+    # Reuse only the independently generated physical Hamiltonian/CD data and
+    # provenance fixture.  Replace every amplitude-side object by the dense,
+    # compressed CP construction above.
+    base = _full_pair_problem(
+        seed, nocc=nocc, nvir=nvir, t1_scale=0.04
+    )
+    oracle_arguments = (
+        doubles,
+        *base["oracle_arguments"][1:],
+    )
+    audit_arguments = dict(base["audit_arguments"])
+    audit_arguments.update(
+        y_occ=factors.y_occ,
+        y_vir=factors.y_vir,
+        amplitude_core=amplitude_core,
+        tau=factors.tau,
+    )
+    return {
+        "target_vectors": target_vectors,
+        "target_projector": target_projector,
+        "factors": factors,
+        "pair_y": pair_y,
+        "reconstructed_vectors": reconstructed_vectors,
+        "doubles": doubles,
+        "amplitude_core": amplitude_core,
+        "oracle_arguments": oracle_arguments,
+        "audit_arguments": audit_arguments,
+        "nocc": nocc,
+        "nvir": nvir,
+        "rr_rank": rr_rank,
+        "thc_rank": thc_rank,
+        "pair_dimension": pair_dimension,
     }
 
 
@@ -381,3 +487,106 @@ def test_complete_assembly_pair_symmetrizes_a_nonsymmetric_raw_algorithm7(
         "raw-plus-pair-transpose"
     )
     assert algorithm7_entry.pair_symmetrization_application_count == 1
+
+
+@pytest.mark.parametrize(
+    "seed,nocc,nvir,rr_rank,thc_rank",
+    [
+        (1721, 3, 3, 3, 4),
+        (1722, 2, 4, 3, 3),
+    ],
+)
+@pytest.mark.parametrize(
+    "omega_ac_path", ["joint-6", "separate-4-plus-5"]
+)
+def test_complete_inexact_cp_identity_against_reconstructed_rr_cd_oracle(
+    seed, nocc, nvir, rr_rank, thc_rank, omega_ac_path
+):
+    problem = _inexact_orthogonalized_cp_problem(
+        seed,
+        nocc=nocc,
+        nvir=nvir,
+        rr_rank=rr_rank,
+        thc_rank=thc_rank,
+    )
+    factors = problem["factors"]
+
+    # This is a genuinely compressed and non-pair-basis amplitude factor.
+    # Its fit to the original generic RR projector is intentionally inexact;
+    # the complete-equation identity below is therefore evaluated against the
+    # orthogonalized projector reconstructed from Eqs. 11--14.
+    assert problem["rr_rank"] < problem["pair_dimension"]
+    assert problem["thc_rank"] < problem["pair_dimension"]
+    assert factors.exact_pair_endpoint is False
+    assert factors.weighted_fit_residual > 1e-5
+    assert factors.weighted_fit_gate_passed is False
+    assert np.linalg.norm(problem["oracle_arguments"][1]) > 1e-3
+    assert np.linalg.norm(
+        problem["target_vectors"] - problem["reconstructed_vectors"]
+    ) > 1e-3
+    assert np.all(
+        np.count_nonzero(np.abs(factors.y_occ) > 1e-10, axis=0) > 1
+    )
+    assert np.all(
+        np.count_nonzero(np.abs(factors.y_vir) > 1e-10, axis=0) > 1
+    )
+
+    # Recompute the Eq. 11--14 symmetric orthogonalization independently from
+    # raw_tau and the Khatri--Rao metric.  This guards against accidentally
+    # treating the post-fit CP tensor as an arbitrary already-orthogonal U.
+    y_gram = (factors.y_occ.T @ factors.y_occ) * (
+        factors.y_vir.T @ factors.y_vir
+    )
+    raw_overlap = factors.raw_tau @ y_gram @ factors.raw_tau.T
+    raw_overlap = (raw_overlap + raw_overlap.T) * 0.5
+    overlap_values, overlap_vectors = np.linalg.eigh(raw_overlap)
+    inverse_sqrt = (
+        overlap_vectors * (1.0 / np.sqrt(overlap_values))[None, :]
+    ) @ overlap_vectors.T
+    expected_tau = inverse_sqrt @ factors.raw_tau
+    np.testing.assert_allclose(
+        factors.tau, expected_tau, atol=3e-14, rtol=3e-13
+    )
+    np.testing.assert_allclose(
+        problem["reconstructed_vectors"].T
+        @ problem["reconstructed_vectors"],
+        np.eye(problem["rr_rank"]),
+        atol=3e-13,
+        rtol=3e-13,
+    )
+    np.testing.assert_allclose(
+        problem["pair_y"]
+        @ problem["amplitude_core"]
+        @ problem["pair_y"].T,
+        problem["doubles"].reconstruct_pair_matrix(),
+        atol=3e-13,
+        rtol=3e-13,
+    )
+
+    oracle_doubles = build_projected_ccsd_doubles_components(
+        *problem["oracle_arguments"],
+        auxiliary_block_size=2,
+        virtual_block_size=2,
+    ).assemble_core()
+    oracle_singles = build_ccsd_singles_numerator(
+        *problem["oracle_arguments"]
+    ).numerator
+    audit = assemble_complete_thc_ccsd_audit(
+        **problem["audit_arguments"], omega_ac_path=omega_ac_path
+    )
+
+    np.testing.assert_allclose(
+        audit.doubles_rr,
+        oracle_doubles,
+        atol=5e-14,
+        rtol=5e-13,
+    )
+    np.testing.assert_allclose(
+        audit.singles,
+        oracle_singles,
+        atol=5e-14,
+        rtol=5e-13,
+    )
+    assert audit.accepted is False
+    assert audit.complete_validated is False
+    assert audit.production_enabled is False
