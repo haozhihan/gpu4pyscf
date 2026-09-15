@@ -1,6 +1,6 @@
 {
   "schema": "gpu4pyscf.water8.implementation-status.v2",
-  "as_of_utc": "2026-09-15T08:22:47.946271+00:00",
+  "as_of_utc": "2026-09-15T08:31:44.745212+00:00",
   "purpose": "Candid implementation and MTU evidence ledger for the fixed WATER27 H2O8d2d single-A100 CCSD project.",
   "claim_policy": {
     "ten_x_claim_allowed": false,
@@ -112,8 +112,8 @@
     "release_snapshot_b_created": false,
     "formal_performance_eligible": false,
     "claim_limit": "Volatile queue-control plus immutable-source readiness only; the job has not run and supplies no numerical, accuracy, release-B, or performance result.",
-    "captured_utc": "2026-09-15T06:50:43.689037+00:00",
-    "captured_mtu": "2026-09-15T02:50:49-04:00",
+    "captured_utc": "2026-09-15T08:09:18+00:00",
+    "captured_mtu": "2026-09-15T04:09:18-04:00",
     "volatile_scheduler_observation": true,
     "ttl_note": "Re-query squeue/scontrol for live state; immutable snapshot and audit hashes remain stable.",
     "qualified_source_head": "92008c580fb90c9c49f7cf1f6b087726650df9dd",
@@ -124,53 +124,61 @@
     "qualifies_snapshot_a_only": true,
     "does_not_qualify_later_ledger_commit_or_mutable_worktree": true,
     "latest_infrastructure_observation": {
-      "observed_utc": "2026-09-15T06:50:43.689037+00:00",
+      "observed_utc": "2026-09-15T08:09:18+00:00",
       "connection_result": "success",
       "queue_state_observed": true,
       "jobs": {
+        "63020": {
+          "state": "PENDING",
+          "reason": "Priority",
+          "elapsed": "00:00:00",
+          "allocated_nodelist": null,
+          "estimated_start_mtu": "2026-09-17T01:34:14"
+        },
         "63068": {
           "state": "PENDING",
           "reason": "Priority",
-          "elapsed": "0:00",
+          "elapsed": "00:00:00",
           "allocated_nodelist": null,
           "estimated_start_mtu": "2026-09-17T01:34:14"
         },
         "63069": {
           "state": "PENDING",
           "reason": "Priority",
-          "elapsed": "0:00",
-          "allocated_nodelist": null,
-          "estimated_start_mtu": "2026-09-17T01:34:14"
-        },
-        "63020": {
-          "state": "PENDING",
-          "reason": "Priority",
-          "elapsed": "0:00",
+          "elapsed": "00:00:00",
           "allocated_nodelist": null,
           "estimated_start_mtu": "2026-09-17T01:34:14"
         }
       },
       "candidate_node_states": {
         "compute-1-0": {
-          "state": "down*",
-          "gres": "gpu:nvidia:4"
+          "state": "drained",
+          "gpu_allocation": "unavailable"
         },
         "compute-1-2": {
           "state": "mixed",
-          "gres": "gpu:nvidia:4"
+          "gpu_allocation": "4/4 allocated"
         },
         "compute-1-3": {
           "state": "mixed",
-          "gres": "gpu:nvidia:4"
+          "gpu_allocation": "4/4 allocated"
+        },
+        "compute-1-4": {
+          "state": "mixed",
+          "gpu_allocation": "4/4 allocated"
         },
         "compute-1-5": {
           "state": "down*",
-          "gres": "gpu:nvidia:4"
+          "gpu_allocation": "unavailable"
+        },
+        "compute-1-6": {
+          "state": "mixed",
+          "gpu_allocation": "4/4 allocated"
         }
       },
-      "interpretation": "A successful SSH/Slurm poll after the in-place candidate-node expansion directly observed jobs 63020, 63068, and 63069 as PENDING Priority with no allocation and no terminal result; no duplicate was submitted.",
-      "evidence": "results/mtu/infrastructure-poll-20260915T065043Z.json",
-      "sha256": "8e153347d1c618dcc7c56c8a6832abf1266e40512c6cc93a0ea86e90c2c465b0"
+      "interpretation": "A successful read-only SSH/Slurm refresh directly observed jobs 63020, 63068, and 63069 as PENDING Priority with no allocation and no terminal result. Every GPU on the mixed nodes was allocated to existing jobs; no duplicate was submitted.",
+      "evidence": "results/mtu/infrastructure-poll-20260915T080918Z.json",
+      "sha256": "434940f4feb48d62d98a3c8e866ce581307fd30c152b93d140dd1db396bd03ce"
     },
     "node_expansion_audit": "results/mtu/qualification-63020-node-expansion.json",
     "node_expansion_audit_sha256": "7a63ca380dc118c3ad0a31f743c121e154fc0866a3169f31fee671fc3efca27f"
@@ -583,7 +591,7 @@
         "After compute-1-0 was observed down, pending unallocated Job 63020 was expanded in place to approved candidate nodes compute-1-[0,2-3]; runtime topology and every downstream consumer remain bound to the actual qualification node through the write-once receipt."
       ],
       "active": [
-        "A successful SSH/Slurm poll at 2026-09-15T06:50:43.689037+00:00 directly observed Job 63020 PENDING Priority with elapsed 00:00:00 and no allocated node; Jobs 63068 and 63069 were also PENDING Priority."
+        "A successful read-only SSH/Slurm refresh at 2026-09-15T08:09:18+00:00 directly observed Job 63020 PENDING Priority with elapsed 00:00:00 and no allocated node; Jobs 63068 and 63069 were also PENDING Priority."
       ],
       "local_verification": {
         "receipt_bound_tight_cd_dag": {
@@ -3214,6 +3222,15 @@
       "resubmission_action": "none",
       "result": "results/mtu/infrastructure-poll-20260915T065043Z.json",
       "sha256": "8e153347d1c618dcc7c56c8a6832abf1266e40512c6cc93a0ea86e90c2c465b0"
+    },
+    "mtu_infrastructure_poll_20260915T080918Z": {
+      "evidence_state": "local_measured",
+      "connection_result": "success",
+      "queue_state_observed": true,
+      "job_state_interpretation": "jobs 63020, 63068, and 63069 all PENDING Priority with no allocation; all GPUs on mixed nodes were allocated to existing running jobs",
+      "resubmission_action": "none",
+      "result": "results/mtu/infrastructure-poll-20260915T080918Z.json",
+      "sha256": "434940f4feb48d62d98a3c8e866ce581307fd30c152b93d140dd1db396bd03ce"
     }
   },
   "accuracy_tables": {
@@ -3447,12 +3464,12 @@
   "artifact_inventory": {
     "path_from_workspace_root": "output/water8-ccsd-implementation-artifacts.sha256",
     "schema": "agent-qc.local-mtu-results-inventory.v2",
-    "generated_utc": "2026-09-15T06:51:15.816889+00:00",
+    "generated_utc": "2026-09-15T08:30:58.725284+00:00",
     "scope": "Every regular file locally present under benchmarks/cc/a100_water8/results/mtu at the inventory timestamp; the inventory itself is outside that root and excluded.",
-    "raw_file_count_at_inventory": 509,
-    "raw_total_bytes_at_inventory": 79618884,
-    "inventory_entry_count": 509,
-    "inventory_sha256": "285c33f05843e5e97e83f365237e0401f2f59c660b4912fae1a4ba6b9b917642",
+    "raw_file_count_at_inventory": 510,
+    "raw_total_bytes_at_inventory": 79621876,
+    "inventory_entry_count": 510,
+    "inventory_sha256": "20e3fc6e2e03fdcdc09277f2e18f580140bea1ffd4f7a8e8e6cc30681daa9d2c",
     "self_hash_policy": "inventory is outside inventory_root and is not listed",
     "verification_command": "python3 analysis/research/ccsd/baseline-comparison/build_mtu_results_inventory.py --check",
     "remote_only_checkpoints": [
