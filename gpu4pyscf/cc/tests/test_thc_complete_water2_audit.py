@@ -392,6 +392,88 @@ def test_cli_validates_the_fixed_inexact_search_before_running_rr(tmp_path):
         audit_driver._validate_cli(args)
 
 
+def test_cli_receipt_is_bound_only_to_selected_reference_gint(tmp_path):
+    receipt = tmp_path / 'receipt.json'
+    receipt.write_text('{}\n', encoding='utf-8')
+    arguments = [
+        '--output',
+        str(tmp_path / 'audit.json'),
+        '--eri-tol',
+        '1e-8',
+        '--rr-eig-cutoff',
+        '1e-6',
+        '--gint-runtime-gate-receipt',
+        str(receipt),
+        '--amplitude-fit-tolerances',
+        '1e-3',
+        '--amplitude-initial-rank',
+        '32',
+        '--amplitude-max-rank',
+        '128',
+        '--eri-candidate',
+        '256:1e-4',
+        '--eri-candidate',
+        '384:1e-5',
+        '--occupation-change-floor',
+        '1e-12',
+    ]
+    args = audit_driver._parser().parse_args(arguments)
+    audit_driver._validate_cli(args)
+    assert args.gint_runtime_gate_receipt == receipt.resolve()
+
+    args.gint_column_backend = 'restricted-reference'
+    with pytest.raises(ValueError, match='selected backend'):
+        audit_driver._validate_cli(args)
+    args.gint_column_backend = 'selected'
+    args.gint_column_kernel = 'grouped'
+    with pytest.raises(ValueError, match='cannot consume'):
+        audit_driver._validate_cli(args)
+    args.gint_column_kernel = 'reference'
+    args.gint_runtime_gate_receipt = tmp_path / 'missing.json'
+    with pytest.raises(ValueError, match='does not exist'):
+        audit_driver._validate_cli(args)
+
+
+def test_selected_gint_runtime_options_reuse_recorded_source_contract(
+    tmp_path,
+    monkeypatch,
+):
+    receipt = tmp_path / 'receipt.json'
+    receipt.write_text('{}\n', encoding='utf-8')
+    args = SimpleNamespace(
+        gint_column_backend='selected',
+        gint_runtime_gate_receipt=receipt,
+    )
+    source_state = {'tree_sha256': 'a' * 64}
+    expected = {
+        'gint_runtime_gate_receipt': str(receipt),
+        'gint_runtime_source_digest': 'a' * 64,
+    }
+    observed = {}
+
+    def recorded(runtime_args, source, *, execution_mode):
+        observed.update(
+            runtime_args=runtime_args,
+            source=source,
+            execution_mode=execution_mode,
+        )
+        return expected
+
+    monkeypatch.setattr(
+        audit_driver.BENCHMARK,
+        '_recorded_gint_runtime_options',
+        recorded,
+    )
+    assert audit_driver._gint_runtime_options(args, source_state) is expected
+    assert observed['runtime_args'].gint_column_backend == 'selected'
+    assert observed['runtime_args'].gint_runtime_gate_receipt == receipt
+    assert observed['source'] is source_state
+    assert observed['execution_mode'] == 'consumer-benchmark'
+
+    args.gint_column_backend = 'restricted-reference'
+    assert audit_driver._gint_runtime_options(args, source_state) == {}
+
+
 def test_run_persists_gpu_identity_and_non_peak_hbm_evidence(
     tmp_path,
     monkeypatch,
@@ -426,10 +508,20 @@ def test_run_persists_gpu_identity_and_non_peak_hbm_evidence(
         '_nvidia_smi_uuid_for_pci',
         lambda _pci: 'GPU-mocked-run',
     )
+    source_state = {
+        'repository': str(audit_driver.REPOSITORY_ROOT),
+        'tree_sha256': 'a' * 64,
+    }
+    monkeypatch.setattr(audit_driver, '_git_state', lambda: source_state)
     monkeypatch.setattr(
-        audit_driver,
-        '_build_rr_solver',
-        lambda _args: (
+        audit_driver.BENCHMARK,
+        '_record_source_stability',
+        lambda _record: True,
+    )
+
+    def fake_build_rr_solver(_args, *, source_state: dict):
+        assert source_state is source_state_at_start
+        return (
             binding.solver,
             {
                 'hf_seconds': 0.0,
@@ -438,8 +530,10 @@ def test_run_persists_gpu_identity_and_non_peak_hbm_evidence(
                 'rr_correlation_energy': -0.1,
                 'orbital': {'orbital_fingerprint': 'sha256:mock-run'},
             },
-        ),
-    )
+        )
+
+    source_state_at_start = source_state
+    monkeypatch.setattr(audit_driver, '_build_rr_solver', fake_build_rr_solver)
 
     def fake_staged(_binding, *, hbm_observer, **_kwargs):
         assert _binding.denominator is binding.denominator
@@ -451,6 +545,10 @@ def test_run_persists_gpu_identity_and_non_peak_hbm_evidence(
 
     result = audit_driver.json.loads(output.read_text(encoding='utf-8'))
     assert result['status'] == 'completed'
+    assert result['schema'] == 'gpu4pyscf.water2-thc-complete-audit.v2'
+    assert result['source'] == source_state
+    assert result['source_at_end'] == source_state
+    assert result['source_stability'] is True
     assert result['gpu_identity']['validated'] is True
     assert result['gpu_identity']['uuid'] == 'GPU-mocked-run'
     assert result['gpu_identity']['primary_identity_kind'] == 'uuid'

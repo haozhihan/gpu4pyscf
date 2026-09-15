@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -72,7 +73,7 @@ from gpu4pyscf.cc.thc_fhat import build_t1_transformed_fhat
 ROOT = Path(__file__).resolve().parent
 CASE_FILE = ROOT / 'cases.json'
 CASE_ID = 'water2-tz'
-SCHEMA = 'gpu4pyscf.water2-thc-complete-audit.v1'
+SCHEMA = 'gpu4pyscf.water2-thc-complete-audit.v2'
 PAIR_DIMENSION = 10 * 106
 GIB = 1024**3
 HARD_HBM_LIMIT_BYTES = 72 * GIB
@@ -84,6 +85,22 @@ FAIL_CLOSED_FLAGS = {
     'formal_validation_eligible': False,
     'complete_validated': False,
 }
+
+
+def _load_benchmark_module():
+    name = 'water2_thc_complete_shared_benchmark'
+    specification = importlib.util.spec_from_file_location(
+        name, ROOT / 'benchmark.py'
+    )
+    if specification is None or specification.loader is None:
+        raise RuntimeError('cannot load the shared WATER27 benchmark module')
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[name] = module
+    specification.loader.exec_module(module)
+    return module
+
+
+BENCHMARK = _load_benchmark_module()
 
 
 def _utc_now() -> str:
@@ -1985,27 +2002,36 @@ def _load_case() -> dict[str, Any]:
 def _load_orbital_artifact(path: Path, mf: Any, case: dict[str, Any]) -> dict[str, Any]:
     """Use the benchmark's strict v1 artifact validator without GPU uploads."""
 
-    import importlib.util
-
-    module_path = ROOT / 'benchmark.py'
-    spec = importlib.util.spec_from_file_location('_water8_benchmark', module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError('cannot load the benchmark orbital validator')
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        sys.modules.pop(spec.name, None)
-    identity = module._canonical_orbital_identity(CASE_ID, case, mf.mol)
-    context = module._load_orbital_artifact(path, identity, mf.mol, np)
+    identity = BENCHMARK._canonical_orbital_identity(CASE_ID, case, mf.mol)
+    context = BENCHMARK._load_orbital_artifact(path, identity, mf.mol, np)
     for name, value in context['_arrays'].items():
         setattr(mf, name, np.array(value, copy=True))
     mf.e_tot = float(context['producer']['hf_energy'])
     return {key: value for key, value in context.items() if key != '_arrays'}
 
 
-def _build_rr_solver(args: argparse.Namespace) -> tuple[Any, dict[str, Any]]:
+def _gint_runtime_options(
+    args: argparse.Namespace,
+    source_state: dict[str, Any],
+) -> dict[str, Any]:
+    if args.gint_column_backend != 'selected':
+        return {}
+    runtime_args = argparse.Namespace(
+        gint_column_backend=args.gint_column_backend,
+        gint_runtime_gate_receipt=args.gint_runtime_gate_receipt,
+    )
+    return BENCHMARK._recorded_gint_runtime_options(
+        runtime_args,
+        source_state,
+        execution_mode='consumer-benchmark',
+    )
+
+
+def _build_rr_solver(
+    args: argparse.Namespace,
+    *,
+    source_state: dict[str, Any],
+) -> tuple[Any, dict[str, Any]]:
     from pyscf import gto, lib, scf
 
     from gpu4pyscf.cc.rrccsd import RRCCSD
@@ -2040,6 +2066,7 @@ def _build_rr_solver(args: argparse.Namespace) -> tuple[Any, dict[str, Any]]:
     if args.orbital_artifact_in is not None:
         orbital = _load_orbital_artifact(args.orbital_artifact_in, mf, case)
 
+    runtime_options = _gint_runtime_options(args, source_state)
     solver = RRCCSD(
         mf,
         eri_tol=args.eri_tol,
@@ -2064,6 +2091,7 @@ def _build_rr_solver(args: argparse.Namespace) -> tuple[Any, dict[str, Any]]:
         rr_auxiliary_block_size=args.auxiliary_block_size,
         rr_virtual_block_size=args.virtual_block_size,
         rr_ring_kernel=args.rr_ring_kernel,
+        **runtime_options,
     )
     solver.frozen = 0
     solver.conv_tol = args.cc_conv_tol
@@ -2076,33 +2104,30 @@ def _build_rr_solver(args: argparse.Namespace) -> tuple[Any, dict[str, Any]]:
     rr_seconds = time.perf_counter() - post_started
     if kernel[1] is not solver.t1 or kernel[2] is not solver.doubles:
         raise ValueError('RR kernel return objects differ from retained lifecycle')
+    method_metadata = solver.method_metadata()
+    if not isinstance(method_metadata, dict):
+        raise TypeError('RRCCSD method_metadata() must return a dictionary')
+    provider_runtime_gate = method_metadata.get('provider_runtime_gate')
+    if args.gint_runtime_gate_receipt is not None and not (
+        isinstance(provider_runtime_gate, dict)
+        and provider_runtime_gate.get('validated') is True
+    ):
+        raise RuntimeError(
+            'selected GINT release receipt was not validated by the provider'
+        )
     return solver, {
         'hf_seconds': hf_seconds,
         'rr_post_hf_seconds': rr_seconds,
         'hf_energy': float(mf.e_tot),
         'rr_correlation_energy': float(kernel[0]),
         'orbital': orbital,
+        'solver_method_metadata': method_metadata,
+        'provider_runtime_gate': provider_runtime_gate,
     }
 
 
 def _git_state() -> dict[str, Any]:
-    def command(*arguments: str) -> str | None:
-        try:
-            return subprocess.check_output(
-                arguments,
-                cwd=ROOT,
-                stderr=subprocess.DEVNULL,
-                text=True,
-                timeout=10,
-            ).strip()
-        except Exception:  # noqa: BLE001 - source metadata is best effort
-            return None
-
-    return {
-        'revision': command('git', 'rev-parse', 'HEAD'),
-        'status_porcelain': command('git', 'status', '--short'),
-        'repository': str(ROOT.parents[2]),
-    }
+    return BENCHMARK._git_state()
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -2128,6 +2153,7 @@ def _parser() -> argparse.ArgumentParser:
         choices=('selected', 'restricted-reference'),
         default='selected',
     )
+    parser.add_argument('--gint-runtime-gate-receipt', type=Path)
     parser.add_argument('--gint-column-kernel', choices=('reference', 'grouped'), default='reference')
     parser.add_argument('--gint-group-size', type=int, default=16)
     parser.add_argument('--gint-max-batch-size', type=int, default=32)
@@ -2217,6 +2243,20 @@ def _validate_cli(args: argparse.Namespace) -> None:
     _positive_float(args.rr_solver_tolerance, name='rr_solver_tolerance')
     if args.rr_ritz_residual_tolerance is not None:
         _nonnegative_float(args.rr_ritz_residual_tolerance, name='rr_ritz_residual_tolerance')
+    if args.gint_runtime_gate_receipt is not None:
+        args.gint_runtime_gate_receipt = (
+            args.gint_runtime_gate_receipt.expanduser().resolve()
+        )
+        if args.gint_column_backend != 'selected':
+            raise ValueError(
+                'a GINT runtime receipt applies only to the selected backend'
+            )
+        if args.gint_column_kernel != 'reference':
+            raise ValueError(
+                'grouped selected-column scheduling cannot consume a release receipt'
+            )
+        if not args.gint_runtime_gate_receipt.is_file():
+            raise ValueError('GINT runtime gate receipt does not exist')
     if args.gint_column_backend != 'selected' and args.gint_column_kernel != 'reference':
         raise ValueError('gint_column_kernel applies only to the selected GINT backend')
     if not args.amplitude_initial_rank <= args.amplitude_max_rank < PAIR_DIMENSION:
@@ -2250,6 +2290,7 @@ def _validate_cli(args: argparse.Namespace) -> None:
 def run(args: argparse.Namespace) -> int:
     _validate_cli(args)
     started = _utc_now()
+    source_start = _git_state()
     base: dict[str, Any] = {
         'schema': SCHEMA,
         'status': 'starting',
@@ -2266,7 +2307,7 @@ def run(args: argparse.Namespace) -> int:
                 'SLURM_CPUS_PER_TASK',
             )
         },
-        'source': _git_state(),
+        'source': source_start,
         'gpu_identity': _pending_gpu_identity(),
         'hbm_observations': _pending_hbm_observations(),
         'controls': {
@@ -2308,7 +2349,7 @@ def run(args: argparse.Namespace) -> int:
         )
         _atomic_json(args.output, base, overwrite=True)
 
-        solver, rr_record = _build_rr_solver(args)
+        solver, rr_record = _build_rr_solver(args, source_state=source_start)
         binding = RRLifecycleBinding.capture(solver)
         hbm_observer.sample('rr-lifecycle-converged')
         base.update(
@@ -2341,6 +2382,15 @@ def run(args: argparse.Namespace) -> int:
             hbm_observer=hbm_observer,
         )
         hbm_observer.sample('process-exit')
+        source_end = _git_state()
+        source_stability = BENCHMARK._record_source_stability(base)
+        if (
+            args.gint_runtime_gate_receipt is not None
+            and source_stability is not True
+        ):
+            raise RuntimeError(
+                'source snapshot or manifest changed during the receipt-bound audit'
+            )
         base.update(
             {
                 'status': 'completed',
@@ -2349,7 +2399,8 @@ def run(args: argparse.Namespace) -> int:
                 'audit': audit,
                 'hbm_observations': hbm_observer.metadata(),
                 'host_rss_peak_bytes': _host_rss_bytes(),
-                'source_at_end': _git_state(),
+                'source_at_end': source_end,
+                'source_stability': source_stability,
                 **_copy_flags(),
             }
         )
