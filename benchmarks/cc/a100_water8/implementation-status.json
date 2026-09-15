@@ -1,10 +1,10 @@
 {
   "schema": "gpu4pyscf.water8.implementation-status.v2",
-  "as_of_utc": "2026-09-15T09:07:30.286497+00:00",
+  "as_of_utc": "2026-09-15T10:06:40.074252+00:00",
   "purpose": "Candid implementation and MTU evidence ledger for the fixed WATER27 H2O8d2d single-A100 CCSD project.",
   "claim_policy": {
     "ten_x_claim_allowed": false,
-    "reason": "G1 is numerically/resource qualified but WATER8 has only one paired timing observation. G3 now has an unexecuted receipt-bound three-threshold DAG, G4 has a tested continuation state machine but no qualifying WATER4 1e-9/1e-11 results, and G5 has exact plus compressed-amplitude equation identities while accepted fit, molecular, ERI-THC, A100 timing, and counterpoise gates remain open.",
+    "reason": "G1 is numerically/resource qualified but WATER8 has only one paired timing observation. G3/G4 now require a sealed post-qualification release acceptance, but Job 63020 is still pending and no acceptance exists. G4 has no qualifying WATER4 1e-9/1e-11 results, G5 remains audit-only despite its local semantic gates, and external ByteQC/GANSU jobs are pending with no result or performance evidence.",
     "evidence_states": [
       "source_reported",
       "local_measured",
@@ -18,9 +18,9 @@
     "frozen_baseline_commit": "a89b3ae018d4e82968323ef95645d91adde294aa",
     "feature_worktree": "analysis/research/ccsd/gpu4pyscf-a100-thc-rr",
     "g0_worktree": "analysis/research/ccsd/gpu4pyscf-g0-baseline",
-    "feature_source_state": "g3-dag-g4-state-machine-and-inexact-amplitude-thc-identity-validated-production-disabled-plus-snapshot-a-qualification-queued",
+    "feature_source_state": "release-acceptance-bound-g3-g4-controls-external-baseline-gates-and-thc-semantic-audits-validated-production-disabled-plus-snapshot-a-qualification-and-external-jobs-pending",
     "feature_performance_eligible": false,
-    "feature_head_before_ledger_update": "aec0d8ba53b971ee7369229f0b0fe8343b74246c",
+    "feature_head_before_ledger_update": "72e6ad2c35a3045acc004c58eb6750da6dc1df0a",
     "merged_implementation_commits": {
       "fused_r123": "29ceab6",
       "fixed_gpu_test_node": "56291e7",
@@ -72,13 +72,21 @@
       "rr_g4_state_machine_integration_tests": "38e846f",
       "inexact_amplitude_thc_equation_identity": "bfe9fc8",
       "tight_cd_g3_receipt_bound_dag": "5dae27b",
-      "tight_cd_g3_control_binding_fix": "aec0d8b"
+      "tight_cd_g3_control_binding_fix": "aec0d8b",
+      "thc_delta_eq43_semantic_gates": "953c426",
+      "external_ccsd_baseline_promotion_gate": "b9ec3eb",
+      "thc_core_symmetry_hard_cap": "49e7a80",
+      "external_ccsd_baseline_gate_recompute": "178e47b",
+      "byteqc_source_attestation_fail_closed": "c0f0a31",
+      "thc_bounded_symmetry_metadata": "e1f5a9f",
+      "selected_gint_release_acceptance_gate": "cc9e959",
+      "selected_gint_ambiguous_pin_recovery": "72e6ad2"
     },
     "current_snapshot_a_head": "92008c580fb90c9c49f7cf1f6b087726650df9dd",
-    "previous_ledger_head": "60b4a4b618d4d6148a5342cb9f45dec02c02e773",
-    "previous_ledger_head_role": "published Algorithms 8-10 and complete-assembler numbering ledger; immutable Snapshot A and queued Job 63020 remain bound to 92008c5",
-    "head_before_this_ledger_update": "aec0d8ba53b971ee7369229f0b0fe8343b74246c",
-    "head_before_this_ledger_update_role": "G3 DAG plus G4 continuation-state and compressed amplitude-THC equation-identity tests; no new immutable runtime snapshot or MTU result"
+    "previous_ledger_head": "81d09496322ea1b200e8c236cabe78cda5239711",
+    "previous_ledger_head_role": "latest MTU queue evidence ledger before THC semantic, external-baseline, and selected-GINT release-chain controls; immutable Snapshot A and queued Job 63020 remain bound to 92008c5",
+    "head_before_this_ledger_update": "72e6ad2c35a3045acc004c58eb6750da6dc1df0a",
+    "head_before_this_ledger_update_role": "THC semantic hardening, fail-closed external baseline promotion, and post-qualification release-acceptance chain implementation; no new immutable runtime snapshot, MTU numerical result, or performance result"
   },
   "current_qualification_observation": {
     "evidence_state": "local_measured",
@@ -244,6 +252,44 @@
     "flagship": "GPU-resident execution -> tight direct Cholesky -> RR-CCSD -> doubles-amplitude THC-RR-CCSD",
     "cheap_probe": "FNO-CCSD + Delta-MP2",
     "combination_policy": "Test FNO with THC-RR only if THC-RR misses 133.04 seconds and FNO independently passes the declared energy and counterpoise budgets."
+  },
+  "external_baseline_controls": {
+    "evidence_state": "local_measured",
+    "source_commits": {
+      "initial_fail_closed_gate": "b9ec3eb9cd64ed4381582a02b1816e2b562ecb8b",
+      "bound_audit_recomputation_and_input_hardening": "178e47b7d4918da677051e5a7d1d050df3767ac3",
+      "byteqc_independent_source_attestation_requirement": "c0f0a31526ff2c8b698131556790a91a1a7f2440"
+    },
+    "control_state": "implemented-and-locally-tested-no-external-result-available",
+    "byteqc": {
+      "classification": "canonical-four-index S/L1 protocol-adjacent candidate",
+      "job_id": "63069",
+      "scheduler_state": "PENDING",
+      "result_available": false,
+      "water2_gate_passed": false,
+      "water4_authorized": false,
+      "formal_v1_post_hf_comparability": false,
+      "formal_limit": "The v2 result path has no independently receipt-bound sealed source tree; self-reported source digests cannot unlock formal V1 comparability even if other missing fields are supplied."
+    },
+    "gansu": {
+      "classification": "RI B-native I/L2 diagnostic",
+      "job_id": "63068",
+      "scheduler_state": "PENDING",
+      "result_available": false,
+      "water2_gate_passed": false,
+      "water4_runner_capability": false,
+      "water4_authorized": false,
+      "formal_v1_post_hf_comparability": false,
+      "formal_limit": "The pinned v2 result contract has no final observed CCSD residual or update norm, and the pinned runner exposes no WATER4 interface."
+    },
+    "performance_data_available": false,
+    "claim_limit": "Jobs 63068 and 63069 remain pending with no result; this section records gate behavior and software classification only and supplies no timing, accuracy, relative-speed, or V1-level claim.",
+    "controls": {
+      "terminal_scheduler_and_result_binding": "fail-closed",
+      "fresh_bound_audit_recomputation_before_water4": true,
+      "strict_json_geometry_and_finite_number_checks": true,
+      "mutable_or_moved_inputs_rejected": true
+    }
   },
   "source_tracks": [
     {
@@ -573,7 +619,8 @@
         "Grouped mode is fail closed for release receipts and performance eligibility until A100 A/B validation.",
         "GPU tests cover selected counts 1/2/8/32 and a cc-pVTZ Rys-7 repeated-ket case with real Schwarz screening.",
         "Commit 6fe3e9e keeps the positive matching inode as the strict portable NFS directory binding while recording cross-client st_dev equality only as diagnostic metadata; job 62688 validates that behavior on compute-1-4 against the older published snapshot.",
-        "Commits 5dae27b and aec0d8b add a receipt-bound plan/preview-submit/executed-receipt/analyze DAG for the exact eri_tol grid 1e-4, 1e-6, 1e-8 on WATER2/WATER4. It compares rr_canonical and rr_cd complete RR pipelines on byte-identical serialized RHF orbitals and one RR cutoff, while explicitly recording that their projectors are built independently. Every result is bound to its planned threshold, RR cutoff, receipt node, source, path, and Slurm identity. The result is an A-track CD-increment diagnostic, not a shared-projector or full-space canonical-CD proof; G3 alone never unlocks WATER8."
+        "Commits 5dae27b and aec0d8b add a receipt-bound plan/preview-submit/executed-receipt/analyze DAG for the exact eri_tol grid 1e-4, 1e-6, 1e-8 on WATER2/WATER4. It compares rr_canonical and rr_cd complete RR pipelines on byte-identical serialized RHF orbitals and one RR cutoff, while explicitly recording that their projectors are built independently. Every result is bound to its planned threshold, RR cutoff, receipt node, source, path, and Slurm identity. The result is an A-track CD-increment diagnostic, not a shared-projector or full-space canonical-CD proof; G3 alone never unlocks WATER8.",
+        "Commits cc9e959 and 72e6ad2 add the post-qualification release plan, submission, terminal acceptance, dynamic receipt-node binding, G3/G4 consumer validation, deterministic resume-pin recovery, and an explicit task-root trust boundary. The code is locally verified, but Job 63020 has not run and no release acceptance exists."
       ],
       "limitations": [
         "The reference selected-column kernel repeats GOUT construction for multiple pivots sharing one ket shell task.",
@@ -582,7 +629,7 @@
         "Attributing the silent seven-second failures of jobs 62612 and 62613 to the old cross-client st_dev check is a high-confidence inference from job 62685 on the same snapshot, not direct proof from their empty logs."
       ],
       "missing": [
-        "Job 63020 terminal COMPLETED/0:0 result and log validation, followed by write-once GINT receipt, release pin, immutable release snapshot B, and receipt-bound B release gate",
+        "Job 63020 terminal COMPLETED/0:0 result and log validation, followed by write-once GINT receipt and release pin, immutable release snapshot B, a receipt-node release run, and its separately sealed release acceptance",
         "A100 grouped selected-count 1/2/8/32 and Rys-7 correctness-only A/B from a new dependency chain",
         "Water2/water4/water8 thresholds 1e-4, 1e-6, and 1e-8 with energy errors, followed by WATER8 counterpoise error"
       ],
@@ -636,7 +683,8 @@
         "Job 62674 converges both direct-CD WATER4 candidates, but cutoff 1e-7/rank 1495 has 5.26532e-4 Eh correlation error and cutoff 1e-8/rank 1914 has 1.1056808544962493e-4 Eh error; both fail the 1e-4 Eh gate, are slower than the 35.569 s canonical observation, and are rejected from WATER8. Because both ranks are below 3392 = 0.8*4240, this does not satisfy the route-level RR stop rule.",
         "The receipt-bound G4 submitter derives the exact node from the receipt and release pin, invokes only the standard benchmark launcher with one node and one GPU, and the write-once validator records a shared-orbital WATER4 canonical oracle plus actual 1e-9/1e-11 ranks before permitting sequential converged points. Each converged gate independently requires projector orthogonality error <=1e-10 and a finite nonnegative reconstructed full-space residual diagnostic. Accuracy-sequence completion and complete-iteration acceleration are independent gates; an accurate but slower pair cannot promote to WATER8.",
         "Commit 30ddc82 fuses the two exact projected Wvvvv ladders with a symmetric bilinear identity, caps fused auxiliary subblocks so two live rank-square transforms remain within the prior one-transform allowance, and records the logical workspace; singleton tails retain the sequential path.",
-        "Commit 38e846f exercises the production G4 CLI state machine through spectrum, gate, authorize, and probe: the first accurate cutoff must run its next tighter point; two accurate but iteration-slower points cannot reach WATER8; rank 3391 may continue and rank 3392 closes the route."
+        "Commit 38e846f exercises the production G4 CLI state machine through spectrum, gate, authorize, and probe: the first accurate cutoff must run its next tighter point; two accurate but iteration-slower points cannot reach WATER8; rank 3391 may continue and rank 3392 closes the route.",
+        "Commit cc9e959 binds G4 spectrum, gate, authorization, probe, and submit paths to the separately sealed release acceptance and exact receipt/source lineage; missing or altered acceptance evidence fails closed. Commit 72e6ad2 retains this contract while adding safe resume-pin recovery."
       ],
       "local_verification": {
         "receipt_bound_g4_continuation": {
@@ -1479,7 +1527,13 @@
           "large_symmetry_tolerance_bypass_rejected": true,
           "roundoff_level_asymmetry_audit_compatible": true,
           "complete_assembler_material_asymmetry_rejected": true,
-          "roundoff_allowance_production_eligible": false
+          "roundoff_allowance_production_eligible": false,
+          "semantic_hardening_commits": [
+            "953c426",
+            "49e7a80",
+            "e1f5a9f"
+          ],
+          "symmetry_check_metadata_semantics": "bounded absolute FP64 roundoff tolerance; exact equality is reported separately"
         },
         "factorized_mp2_weights_state": {
           "source_commit": "4c175a1",
@@ -1716,7 +1770,7 @@
     "python_compile_passed": true,
     "git_diff_and_whitespace_passed": true,
     "candidate_mtu_validation_completed": false,
-    "known_evidence_gap": "Snapshot A 29a74a45... is immutable/runtime-closed and Job 63020 is queued on candidate nodes compute-1-[0,2-3], but it has not run. No selected-GINT receipt, release snapshot B, release-gate result, grouped A/B, or receipt-bound G3/G4/G5 molecular result exists.",
+    "known_evidence_gap": "Snapshot A 29a74a45... is immutable/runtime-closed and Job 63020 is queued on candidate nodes compute-1-[0,2-3], but it has not run. No selected-GINT receipt, release snapshot B, release-gate acceptance, grouped A/B, or receipt-bound G3/G4/G5 molecular result exists. External jobs 63068 and 63069 are also pending and supply no result.",
     "fused_r123_review": "no-P0-P1-P2",
     "grouped_gint_review": "no-P0-P1-P2",
     "a2_runtime_build_and_snapshot_validation": "passed",
@@ -1840,6 +1894,34 @@
       "production_enabled": false,
       "performance_eligible": false,
       "independent_review": "no-P0-P1-P2-P3-after-rectangular-coverage"
+    },
+    "latest_local_test_run": {
+      "source_git_head": "72e6ad2c35a3045acc004c58eb6750da6dc1df0a",
+      "targeted": {
+        "passed": 231,
+        "failed": 0,
+        "scope": "THC semantic gates, external baseline gate, and selected-GINT release/consumer chain"
+      },
+      "broad": {
+        "passed": 1198,
+        "skipped_environment": 74,
+        "failed": 0,
+        "excluded_upstream_test": "gpu4pyscf/cc/tests/test_ccsd.py requires an installed local pyscf"
+      },
+      "claim_limit": "Local CPU/control tests only; no new MTU numerical or performance result."
+    },
+    "selected_gint_release_chain": {
+      "commits": [
+        "cc9e959",
+        "72e6ad2"
+      ],
+      "separate_release_acceptance_required": true,
+      "dynamic_receipt_node_binding": true,
+      "g3_g4_fail_closed": true,
+      "resume_pin_recovery": true,
+      "trust_boundary": "task-root-owner-and-root-are-trusted-cooperators",
+      "release_acceptance_available": false,
+      "performance_eligible": false
     }
   },
   "mtu_job_ledger": [
@@ -3519,7 +3601,9 @@
   "update_protocol": {
     "running_jobs": [],
     "pending_jobs": [
-      "63020 Snapshot A reference selected-GINT WATER2 qualification: PENDING Priority on approved candidate nodes compute-1-[0,2-3], elapsed 00:00:00; hold released 2026-09-15T01:54:19-04:00 and node set expanded in place at 2026-09-15T02:50:17-04:00."
+      "63020 Snapshot A reference selected-GINT WATER2 qualification: PENDING Priority on approved candidate nodes compute-1-[0,2-3], elapsed 00:00:00; hold released 2026-09-15T01:54:19-04:00 and node set expanded in place at 2026-09-15T02:50:17-04:00.",
+      "63068 GANSU RI-RCCSD WATER2 diagnostic: PENDING Priority with no allocated node and no numerical or timing result.",
+      "63069 ByteQC canonical RCCSD WATER2 protocol-adjacent candidate: PENDING Priority with no allocated node and no numerical or timing result."
     ],
     "on_job_completion": [
       "Sync raw stdout/stderr, result JSON, checkpoint, topology record, and Slurm accounting.",
@@ -3529,7 +3613,8 @@
       "Do not label a ratio as a formal median speedup or report a candidate CV until the required matched repetitions exist."
     ],
     "next_gate_actions": [
-      "When Job 63020 reaches a terminal state, first seal its Slurm/result/log evidence. Only COMPLETED/0:0 may issue the write-once receipt and release pin, create release snapshot B, and run the receipt-bound B release gate; otherwise preserve the failure and do not launch G4/G5 consumers.",
+      "When Job 63020 reaches a terminal state, first seal its Slurm/result/log evidence. Only COMPLETED/0:0 may issue the write-once receipt and release pin, create release snapshot B, submit the release gate on the receipt-pinned node, and then issue a separate write-once release acceptance after that job is COMPLETED/0:0. G3/G4 remain fail closed until this acceptance exists.",
+      "When jobs 63068 or 63069 become terminal, preserve their raw result and scheduler evidence and run the bound external result audit before any comparison. ByteQC remains S/L1 and formally incomparable to V1 without independently receipt-bound source provenance; the current GANSU I/L2 runner and result contract cannot authorize WATER4.",
       "Preserve jobs 62612 and 62613 as failed terminal scheduler evidence and keep their cause explicitly classified as a high-confidence inference rather than direct log proof.",
       "Treat cancelled jobs 62614 and 62615 as superseded; any resumed formal GINT qualification requires a new portable-validator snapshot and dependency chain.",
       "Do not run WATER8 FNO: jobs 62630-62633 triggered the WATER4 stop rule.",
