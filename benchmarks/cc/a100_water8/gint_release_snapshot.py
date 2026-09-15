@@ -21,6 +21,8 @@ from gpu4pyscf.cc.gint_transfer_audit import (
     RELEASE_PIN_SCHEMA,
     release_source_tree_digest,
     source_snapshot_normalization_errors,
+    validate_scontrol_helper_portable_binding,
+    validate_scontrol_loader_portable_binding,
 )
 
 
@@ -222,6 +224,8 @@ def _validate_release_pin_shape(pin: Mapping[str, Any]) -> None:
         "partition", "cpu_affinity", "gpu_pci_bus_ids", "gpu_node_cpulist",
         "gpu_numa_node", "mems_allowed_list", "memory_policy",
         "topology_path_template", "qualification_topology_fingerprint_sha256",
+        "slurm_controller_helper",
+        "slurm_controller_loader",
     }, "release_runtime_contract")
     exact(pin["runtime"], {
         "libgint_sha256", "libgint_bytes", "basis_prod_cache_abi_sha256",
@@ -349,6 +353,19 @@ def promote_release_snapshot(
         release_pin, name="release pin"
     )
     _validate_release_pin_shape(pin)
+    validate_scontrol_helper_portable_binding(
+        pin["release_runtime_contract"]["slurm_controller_helper"]
+    )
+    validate_scontrol_loader_portable_binding(
+        pin["release_runtime_contract"]["slurm_controller_loader"]
+    )
+    if (
+        pin["release_runtime_contract"]["slurm_controller_loader"].get(
+            "query_helper"
+        )
+        != pin["release_runtime_contract"]["slurm_controller_helper"]
+    ):
+        raise ValueError("release pin scontrol loader/helper binding mismatch")
     if pin.get("schema") != RELEASE_PIN_SCHEMA:
         raise ValueError("release pin schema mismatch")
     lineage = pin.get("lineage") or {}

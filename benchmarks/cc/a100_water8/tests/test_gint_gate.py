@@ -5,11 +5,13 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 from types import SimpleNamespace
 
 import numpy as np
@@ -69,6 +71,186 @@ SOURCE_DIGEST = "a" * 64
 MANIFEST_DIGEST = "b" * 64
 _TEST_RELEASE_RUNTIME: dict = {}
 _REAL_RELEASE_RUNTIME_OBSERVER = GINT_AUDIT._observe_current_release_runtime
+_TEST_SCONTROL_CONTENT = b"unit-test controlled scontrol\n"
+_TEST_SLURM_LIBRARY_CONTENT = b"unit-test controlled libslurmfull\n"
+_STATIC_CONTROL_DIRECTORY = tempfile.TemporaryDirectory(
+    prefix="gpu4pyscf-controlled-scontrol-test-"
+)
+_STATIC_CONTROL_ROOT = Path(_STATIC_CONTROL_DIRECTORY.name).resolve() / "task"
+
+
+def _thread_affinity_evidence(
+    affinities: tuple[str, ...] = tuple(str(cpu) for cpu in range(24, 32)),
+) -> dict:
+    threads = [
+        {"tid": 5100 + index, "affinity": affinity}
+        for index, affinity in enumerate(affinities)
+    ]
+    union: set[int] = set()
+    for affinity in affinities:
+        union.update(GINT_AUDIT._parse_cpu_list(affinity))
+    ids = [item["tid"] for item in threads]
+    return {
+        "schema": GINT_AUDIT.THREAD_AFFINITY_OBSERVATION_SCHEMA,
+        "source": "stable-proc-self-task-status",
+        "task_directory": "/proc/self/task",
+        "thread_count": len(threads),
+        "thread_ids_before": ids,
+        "thread_ids_after": ids,
+        "threads": threads,
+        "union_affinity": GINT_AUDIT._format_cpu_list(union),
+        "expected_affinity": "24-31",
+        "all_threads_within_expected": all(
+            set(GINT_AUDIT._parse_cpu_list(value)).issubset(set(range(24, 32)))
+            for value in affinities
+        ),
+        "union_covers_expected": set(range(24, 32)).issubset(union),
+        "stable": True,
+        "errors": [],
+    }
+
+
+def _fake_helper_identity(task_root: Path | str, *, inode_base: int = 1000) -> dict:
+    task_root = Path(task_root)
+    executable = task_root / GINT_AUDIT._SCONTROL_RELATIVE_PATH
+    library = task_root / GINT_AUDIT._SCONTROL_LIBRARY_RELATIVE_PATH
+    uid = getattr(GINT_AUDIT.os, "geteuid", lambda: 0)()
+    gid = getattr(GINT_AUDIT.os, "getegid", lambda: 0)()
+    directories = {
+        role: {
+            "path": str(task_root / relative),
+            "mode": 0o555,
+            "owner_uid": uid,
+            "owner_gid": gid,
+            "hard_links": 1,
+            "directory_identity": {
+                "device": 1,
+                "inode": inode_base + index,
+            },
+        }
+        for index, (role, relative) in enumerate(
+            GINT_AUDIT._SCONTROL_DIRECTORY_RELATIVE_PATHS.items()
+        )
+    }
+    return {
+        "schema": GINT_AUDIT.SCONTROL_HELPER_SCHEMA,
+        "status": "validated",
+        "trust_boundary": GINT_AUDIT.SCONTROL_HELPER_TRUST_BOUNDARY,
+        "task_root": str(task_root),
+        "configured_path": str(executable),
+        "library_search_path_prefix": str(library.parent),
+        "elf_loader_policy": dict(GINT_AUDIT._SCONTROL_ELF_LOADER_POLICY),
+        "directories": directories,
+        "executable": {
+            "path": str(executable),
+            "sha256": GINT_AUDIT._SCONTROL_SHA256,
+            "bytes": GINT_AUDIT._SCONTROL_BYTES,
+            "mode": 0o555,
+            "owner_uid": uid,
+            "owner_gid": gid,
+            "hard_links": 1,
+            "directory_identity": {
+                "device": 1,
+                "inode": inode_base + len(directories),
+            },
+        },
+        "library": {
+            "path": str(library),
+            "sha256": GINT_AUDIT._SCONTROL_LIBRARY_SHA256,
+            "bytes": GINT_AUDIT._SCONTROL_LIBRARY_BYTES,
+            "mode": 0o444,
+            "owner_uid": uid,
+            "owner_gid": gid,
+            "hard_links": 1,
+            "directory_identity": {
+                "device": 1,
+                "inode": inode_base + len(directories) + 1,
+            },
+        },
+        "errors": [],
+    }
+
+
+def _fake_loader_evidence(
+    identity: dict, *, child_pid: int = 7654
+) -> dict:
+    library_path = Path(identity["library"]["path"]).resolve(strict=True)
+    debug_line = f"{child_pid}: calling init: {library_path} [0]"
+    debug_stderr = (debug_line + "\n").encode()
+    return {
+        "schema": GINT_AUDIT.SCONTROL_LOADER_EVIDENCE_SCHEMA,
+        "status": "validated",
+        "source": "glibc-LD_DEBUG=libs-calling-init",
+        "child_pid": child_pid,
+        "task_root": identity["task_root"],
+        "soname": GINT_AUDIT._SCONTROL_ELF_LOADER_POLICY["needed_soname"],
+        "elf_loader_policy": dict(GINT_AUDIT._SCONTROL_ELF_LOADER_POLICY),
+        "raw_loaded_path": str(library_path),
+        "canonical_loaded_path": str(library_path),
+        "library": json.loads(json.dumps(identity["library"])),
+        "debug_line": debug_line,
+        "debug_stderr_sha256": hashlib.sha256(debug_stderr).hexdigest(),
+        "debug_stderr_bytes": len(debug_stderr),
+        "helper_before": json.loads(json.dumps(identity)),
+        "helper_after": json.loads(json.dumps(identity)),
+        "stable_during_query": True,
+        "errors": [],
+    }
+
+
+def _qualification_helper_evidence_from_identity(identity: dict) -> dict:
+    start_loader = _fake_loader_evidence(identity, child_pid=7654)
+    end_loader = _fake_loader_evidence(identity, child_pid=7655)
+    return {
+        "schema": GATE.SCONTROL_QUALIFICATION_EVIDENCE_SCHEMA,
+        "helper_schema": GINT_AUDIT.SCONTROL_HELPER_SCHEMA,
+        "loader_schema": GINT_AUDIT.SCONTROL_LOADER_EVIDENCE_SCHEMA,
+        "start": identity,
+        "start_query": {"loader_evidence": start_loader},
+        "end": json.loads(json.dumps(identity)),
+        "end_query": {"loader_evidence": end_loader},
+        "portable_binding": GINT_AUDIT.scontrol_helper_portable_binding(identity),
+        "portable_loader_binding": (
+            GINT_AUDIT.scontrol_loader_portable_binding(start_loader)
+        ),
+        "stable_during_run": True,
+        "errors": [],
+    }
+
+
+def _qualification_helper_evidence(_task_root: Path | str) -> dict:
+    if not _STATIC_CONTROL_ROOT.exists():
+        _STATIC_CONTROL_ROOT.mkdir()
+        identity = _install_control_helper(_STATIC_CONTROL_ROOT)
+    else:
+        executable = _STATIC_CONTROL_ROOT / GINT_AUDIT._SCONTROL_RELATIVE_PATH
+        library = _STATIC_CONTROL_ROOT / GINT_AUDIT._SCONTROL_LIBRARY_RELATIVE_PATH
+        os.environ["CCSD_TASK_ROOT"] = str(_STATIC_CONTROL_ROOT)
+        os.environ["CCSD_SCONTROL_PATH"] = str(executable)
+        os.environ["LD_LIBRARY_PATH"] = str(library.parent)
+        identity = GINT_AUDIT.observe_scontrol_helper_identity()
+    if identity["status"] != "validated":
+        raise AssertionError(identity["errors"])
+    return _qualification_helper_evidence_from_identity(identity)
+
+
+def _install_control_helper(task_root: Path) -> dict:
+    executable = task_root / GINT_AUDIT._SCONTROL_RELATIVE_PATH
+    library = task_root / GINT_AUDIT._SCONTROL_LIBRARY_RELATIVE_PATH
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    library.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_bytes(_TEST_SCONTROL_CONTENT)
+    executable.chmod(0o555)
+    library.write_bytes(_TEST_SLURM_LIBRARY_CONTENT)
+    library.chmod(0o444)
+    for relative in reversed(
+        tuple(GINT_AUDIT._SCONTROL_DIRECTORY_RELATIVE_PATHS.values())
+    ):
+        (task_root / relative).chmod(0o555)
+    os.environ["CCSD_TASK_ROOT"] = str(task_root)
+    os.environ["CCSD_SCONTROL_PATH"] = str(executable)
+    os.environ["LD_LIBRARY_PATH"] = str(library.parent)
+    return GINT_AUDIT.observe_scontrol_helper_identity()
 
 
 def _source_normalization(links: list[dict] | None = None) -> dict:
@@ -118,6 +300,21 @@ def _independent_release_runtime_observer(monkeypatch):
         "_observe_current_release_runtime",
         lambda: json.loads(json.dumps(_TEST_RELEASE_RUNTIME)),
     )
+    monkeypatch.setattr(
+        GINT_AUDIT, "_SCONTROL_SHA256",
+        hashlib.sha256(_TEST_SCONTROL_CONTENT).hexdigest(),
+    )
+    monkeypatch.setattr(
+        GINT_AUDIT, "_SCONTROL_BYTES", len(_TEST_SCONTROL_CONTENT),
+    )
+    monkeypatch.setattr(
+        GINT_AUDIT, "_SCONTROL_LIBRARY_SHA256",
+        hashlib.sha256(_TEST_SLURM_LIBRARY_CONTENT).hexdigest(),
+    )
+    monkeypatch.setattr(
+        GINT_AUDIT, "_SCONTROL_LIBRARY_BYTES",
+        len(_TEST_SLURM_LIBRARY_CONTENT),
+    )
 
 
 def test_release_runtime_observer_reads_process_linux_slurm_and_cuda(
@@ -130,6 +327,13 @@ def test_release_runtime_observer_reads_process_linux_slurm_and_cuda(
     node_root = tmp_path / "nodes"
     (node_root / "node3").mkdir(parents=True)
     (node_root / "node3" / "cpulist").write_text("24-31,88-95\n")
+    proc_tasks = tmp_path / "proc-self-task"
+    for offset, cpu in enumerate(range(24, 32)):
+        thread = proc_tasks / str(6100 + offset)
+        thread.mkdir(parents=True)
+        (thread / "status").write_text(
+            f"Name:\ttest\nCpus_allowed_list:\t{cpu}\n"
+        )
     environment = {
         "SLURM_JOB_ID": "70002",
         "SLURM_JOB_NAME": "gint-release-" + "a" * 64,
@@ -145,13 +349,8 @@ def test_release_runtime_observer_reads_process_linux_slurm_and_cuda(
             monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(GINT_AUDIT, "_PCI_SYSFS_DEVICES", pci_root)
     monkeypatch.setattr(GINT_AUDIT, "_NODE_SYSFS_DEVICES", node_root)
+    monkeypatch.setattr(GINT_AUDIT, "_PROC_SELF_TASK", proc_tasks)
     monkeypatch.setattr(GINT_AUDIT.os, "getpid", lambda: 42002)
-    monkeypatch.setattr(
-        GINT_AUDIT.os,
-        "sched_getaffinity",
-        lambda _pid: set(range(24, 32)),
-        raising=False,
-    )
     monkeypatch.setattr(
         GINT_AUDIT.socket, "gethostname", lambda: "compute-1-6"
     )
@@ -166,7 +365,7 @@ def test_release_runtime_observer_reads_process_linux_slurm_and_cuda(
     monkeypatch.setattr(
         GINT_AUDIT,
         "_query_slurm_controller",
-        lambda _job: {
+        lambda _job, **_kwargs: {
             "JobId": "70002",
             "JobName": environment["SLURM_JOB_NAME"],
             "Partition": "mrigpu",
@@ -178,6 +377,12 @@ def test_release_runtime_observer_reads_process_linux_slurm_and_cuda(
             "CPUs/Task": "64",
             "Command": "/snapshot/run_mtu_gint_gate.sbatch",
         },
+    )
+    helper = _fake_helper_identity(tmp_path / "task")
+    monkeypatch.setattr(
+        GINT_AUDIT,
+        "observe_scontrol_helper_identity",
+        lambda **_kwargs: helper,
     )
     fake_cupy = SimpleNamespace(
         cuda=SimpleNamespace(
@@ -198,10 +403,13 @@ def test_release_runtime_observer_reads_process_linux_slurm_and_cuda(
     assert observed["pid"] == 42002
     assert observed["host"] == "compute-1-6"
     assert observed["affinity"] == "24-31"
+    assert observed["thread_affinity"]["thread_count"] == 8
+    assert observed["thread_affinity"]["union_covers_expected"] is True
     assert observed["mems_allowed_list"] == "3"
     assert observed["gpu_node_cpulist"] == "24-31,88-95"
     assert observed["kernel_memory_policy"]["mode_name"] == "preferred"
     assert observed["slurm_controller"]["JobState"] == "RUNNING"
+    assert observed["slurm_controller_helper"] == helper
     assert observed["cuda"] == {
         "visible_devices_environment": "0",
         "device_count": 1,
@@ -214,32 +422,265 @@ def test_release_runtime_observer_reads_process_linux_slurm_and_cuda(
 def test_slurm_controller_probe_ignores_path_and_parses_live_job(
     monkeypatch, tmp_path: Path,
 ):
-    assert GINT_AUDIT._SCONTROL_PATH == Path("/usr/bin/scontrol")
     attacker = tmp_path / "scontrol"
     attacker.write_text("#!/bin/sh\nexit 0\n")
     attacker.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path))
-    # /usr/bin/env provides a root-owned executable for this CPU-only test;
-    # subprocess itself is mocked, so no command is executed.
-    trusted_test_binary = Path("/usr/bin/env")
-    monkeypatch.setattr(GINT_AUDIT, "_SCONTROL_PATH", trusted_test_binary)
+    task_root = tmp_path / "task"
+    task_root.mkdir()
+    helper = _install_control_helper(task_root)
+    trusted_test_binary = Path(helper["executable"]["path"])
     captured: list[list[str]] = []
+    library = Path(helper["library"]["path"])
+    monkeypatch.setenv("LD_PRELOAD", "/attacker/preload.so")
+    monkeypatch.setenv("LD_AUDIT", "/attacker/audit.so")
+    monkeypatch.setenv("LD_DEBUG_OUTPUT", "/attacker/debug")
 
-    def fake_check_output(arguments, **_kwargs):
-        captured.append(list(arguments))
-        return (
-            "JobId=70002 JobName=gint-release-x Partition=mrigpu "
-            "NodeList=compute-1-6 ReqNodeList=compute-1-6 "
-            "JobState=RUNNING NumCPUs=64 NumTasks=1 CPUs/Task=64 "
-            "Command=/snapshot/run_mtu_gint_gate.sbatch\n"
-        )
+    class FakeProcess:
+        pid = 7654
+        returncode = 0
 
-    monkeypatch.setattr(GINT_AUDIT.subprocess, "check_output", fake_check_output)
+        def __init__(self, arguments, **kwargs):
+            captured.append(list(arguments))
+            assert kwargs["env"]["LD_LIBRARY_PATH"].split(":", 1)[0] == (
+                helper["library_search_path_prefix"]
+            )
+            assert "LD_PRELOAD" not in kwargs["env"]
+            assert "LD_AUDIT" not in kwargs["env"]
+            assert "LD_DEBUG_OUTPUT" not in kwargs["env"]
+            assert kwargs["env"]["LD_DEBUG"] == "libs"
+
+        def communicate(self, timeout=None):
+            assert timeout == 15
+            output = (
+                "JobId=70002 JobName=gint-release-x Partition=mrigpu "
+                "NodeList=compute-1-6 ReqNodeList=compute-1-6 "
+                "JobState=RUNNING NumCPUs=64 NumTasks=1 CPUs/Task=64 "
+                "Command=/snapshot/run_mtu_gint_gate.sbatch\n"
+            )
+            debug = f"      {self.pid}:\tcalling init: {library} [0]\n"
+            return output.encode(), debug.encode()
+
+        def kill(self):  # pragma: no cover - timeout path is separate
+            self.returncode = -9
+
+    monkeypatch.setattr(GINT_AUDIT.subprocess, "Popen", FakeProcess)
     observed = GINT_AUDIT._query_slurm_controller("70002")
     assert captured[0][0] == str(trusted_test_binary)
     assert captured[0][0] != str(attacker)
     assert observed["ReqNodeList"] == "compute-1-6"
     assert observed["CPUs/Task"] == "64"
+    assert observed["loader_evidence"]["status"] == "validated"
+    assert observed["loader_evidence"]["canonical_loaded_path"] == str(
+        library
+    )
+
+
+def test_loader_evidence_rejects_system_or_ambiguous_slurm_library(
+    tmp_path: Path,
+) -> None:
+    task_root = tmp_path / "task"
+    task_root.mkdir()
+    helper = _install_control_helper(task_root)
+    expected = Path(helper["library"]["path"])
+    attacker = tmp_path / "system" / "libslurmfull.so"
+    attacker.parent.mkdir()
+    attacker.write_bytes(_TEST_SLURM_LIBRARY_CONTENT)
+    attacker.chmod(0o444)
+
+    with pytest.raises(RuntimeError, match="unexpected path"):
+        GINT_AUDIT._scontrol_loader_evidence(
+            f"7700: calling init: {attacker} [0]\n",
+            child_pid=7700,
+            helper_before=helper,
+            helper_after=helper,
+        )
+    with pytest.raises(RuntimeError, match="exactly one"):
+        GINT_AUDIT._scontrol_loader_evidence(
+            (
+                f"7701: calling init: {expected} [0]\n"
+                f"7701: calling init: {expected} [0]\n"
+            ),
+            child_pid=7701,
+            helper_before=helper,
+            helper_after=helper,
+        )
+
+
+def test_loader_evidence_rechecks_mapped_library_content(tmp_path: Path) -> None:
+    task_root = tmp_path / "task"
+    task_root.mkdir()
+    helper = _install_control_helper(task_root)
+    library = Path(helper["library"]["path"])
+    library.chmod(0o644)
+    library.write_bytes(_TEST_SLURM_LIBRARY_CONTENT + b"tampered")
+    library.chmod(0o444)
+
+    with pytest.raises(ValueError, match="content identity"):
+        GINT_AUDIT._scontrol_loader_evidence(
+            f"7702: calling init: {library} [0]\n",
+            child_pid=7702,
+            helper_before=helper,
+            helper_after=helper,
+        )
+
+
+def test_loader_portable_binding_ignores_query_pid_but_binds_library(
+    tmp_path: Path,
+) -> None:
+    task_root = tmp_path / "task"
+    task_root.mkdir()
+    helper = _install_control_helper(task_root)
+    first = _fake_loader_evidence(helper, child_pid=7703)
+    second = _fake_loader_evidence(helper, child_pid=7704)
+
+    assert GINT_AUDIT.scontrol_loader_portable_binding(first) == (
+        GINT_AUDIT.scontrol_loader_portable_binding(second)
+    )
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    (
+        "missing-path",
+        "relative-path",
+        "forged-path",
+        "executable-hash",
+        "library-hash",
+        "executable-writable",
+        "library-writable",
+        "library-executable",
+        "executable-not-executable",
+        "control-tools-writable",
+        "distribution-writable",
+        "bin-directory-writable",
+        "lib-directory-writable",
+    ),
+)
+def test_controlled_scontrol_helper_fails_closed(
+    monkeypatch, tmp_path: Path, tamper: str,
+):
+    task_root = tmp_path / "task"
+    task_root.mkdir()
+    valid = _install_control_helper(task_root)
+    assert valid["status"] == "validated"
+    executable = Path(valid["executable"]["path"])
+    library = Path(valid["library"]["path"])
+    if tamper == "missing-path":
+        monkeypatch.delenv("CCSD_SCONTROL_PATH")
+    elif tamper == "relative-path":
+        monkeypatch.setenv(
+            "CCSD_SCONTROL_PATH",
+            GINT_AUDIT._SCONTROL_RELATIVE_PATH.as_posix(),
+        )
+    elif tamper == "forged-path":
+        attacker = tmp_path / "attacker" / "scontrol"
+        attacker.parent.mkdir()
+        attacker.write_bytes(_TEST_SCONTROL_CONTENT)
+        attacker.chmod(0o555)
+        monkeypatch.setenv("PATH", str(attacker.parent))
+        monkeypatch.setenv("CCSD_SCONTROL_PATH", str(attacker))
+    elif tamper == "executable-hash":
+        executable.chmod(0o755)
+        executable.write_bytes(_TEST_SCONTROL_CONTENT + b"tamper")
+        executable.chmod(0o555)
+    elif tamper == "library-hash":
+        library.chmod(0o644)
+        library.write_bytes(_TEST_SLURM_LIBRARY_CONTENT + b"tamper")
+        library.chmod(0o444)
+    elif tamper == "executable-writable":
+        executable.chmod(0o755)
+    elif tamper == "library-writable":
+        library.chmod(0o644)
+    elif tamper == "library-executable":
+        library.chmod(0o555)
+    elif tamper == "executable-not-executable":
+        executable.chmod(0o444)
+    elif tamper == "control-tools-writable":
+        (task_root / "control-tools").chmod(0o755)
+    elif tamper == "distribution-writable":
+        (
+            task_root / GINT_AUDIT._SCONTROL_DISTRIBUTION_RELATIVE_PATH
+        ).chmod(0o755)
+    elif tamper == "bin-directory-writable":
+        executable.parent.chmod(0o755)
+    elif tamper == "lib-directory-writable":
+        library.parent.chmod(0o755)
+    else:  # pragma: no cover
+        raise AssertionError(tamper)
+
+    observed = GINT_AUDIT.observe_scontrol_helper_identity()
+    assert observed["status"] == "invalid"
+    with pytest.raises((ValueError, RuntimeError)):
+        GINT_AUDIT._query_slurm_controller("70002")
+
+
+def test_slurm_controller_probe_rejects_helper_changed_during_query(
+    monkeypatch, tmp_path: Path,
+):
+    before = _fake_helper_identity(tmp_path / "task", inode_base=4000)
+    after = json.loads(json.dumps(before))
+    after["executable"]["directory_identity"]["inode"] += 1
+    observations = iter((before, after))
+    monkeypatch.setattr(
+        GINT_AUDIT,
+        "observe_scontrol_helper_identity",
+        lambda **_kwargs: next(observations),
+    )
+    monkeypatch.setattr(
+        GINT_AUDIT.subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: (
+            "JobId=70002 JobName=gint-release-x Partition=mrigpu "
+            "NodeList=compute-1-6 ReqNodeList=compute-1-6 "
+            "JobState=RUNNING NumCPUs=64 NumTasks=1 CPUs/Task=64\n"
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="changed while queried"):
+        GINT_AUDIT._query_slurm_controller("70002")
+
+
+def _write_proc_affinity(root: Path, values: tuple[str, ...]) -> None:
+    for index, value in enumerate(values):
+        thread = root / str(7100 + index)
+        thread.mkdir(parents=True)
+        (thread / "status").write_text(
+            f"Name:\ttest\nCpus_allowed_list:\t{value}\n"
+        )
+
+
+def test_thread_affinity_observer_aggregates_openmp_worker_masks(tmp_path: Path):
+    proc_tasks = tmp_path / "tasks"
+    _write_proc_affinity(
+        proc_tasks, tuple(str(cpu) for cpu in range(24, 32))
+    )
+    observed = GINT_AUDIT.observe_process_thread_affinity(proc_tasks)
+    assert observed["stable"] is True
+    assert observed["threads"][0]["affinity"] == "24"
+    assert observed["union_affinity"] == "24-31"
+    assert observed["all_threads_within_expected"] is True
+    assert observed["union_covers_expected"] is True
+
+
+@pytest.mark.parametrize(
+    ("values", "reason"),
+    (
+        (("24",), "does not cover CPUs 24-31"),
+        (
+            tuple(str(cpu) for cpu in range(24, 31)) + ("32",),
+            "leave CPUs 24-31",
+        ),
+    ),
+)
+def test_thread_affinity_observer_rejects_missing_or_outside_workers(
+    tmp_path: Path, values: tuple[str, ...], reason: str,
+):
+    proc_tasks = tmp_path / "tasks"
+    _write_proc_affinity(proc_tasks, values)
+    observed = GINT_AUDIT.observe_process_thread_affinity(proc_tasks)
+    assert observed["stable"] is False
+    assert reason in "\n".join(observed["errors"])
 
 
 def _candidate_runtime_manifest(
@@ -399,7 +840,7 @@ def _local_provenance() -> dict:
     }
 
 
-def _passing_record():
+def _passing_record(*, helper_evidence: dict | None = None):
     dimension = 116 * 117 // 2
     h2d_operations = {
         "selected_device_schedule": {"bytes": 4096, "count": 8},
@@ -427,7 +868,13 @@ def _passing_record():
     d2h_bytes = sum(item["bytes"] for item in d2h_operations.values())
     transfer_total = h2d_bytes + d2h_bytes
     return {
+        "schema": GATE.GINT_GATE_RESULT_SCHEMA,
         "status": "completed",
+        "slurm_controller_helper": (
+            _qualification_helper_evidence("/task")
+            if helper_evidence is None
+            else helper_evidence
+        ),
         "source": _passing_source_evidence(),
         "topology": {
             "passed": True,
@@ -684,6 +1131,8 @@ def _materialize_qualification(
     package_dir = source / "gpu4pyscf" / "cc"
     library_dir.mkdir(parents=True)
     package_dir.mkdir(parents=True)
+    helper_identity = _install_control_helper(task)
+    assert helper_identity["status"] == "validated"
     (package_dir / "provider.py").write_text("QUALIFIED_SOURCE = True\n")
     if with_internal_link:
         link_dir = source / "builder"
@@ -822,7 +1271,11 @@ def _materialize_qualification(
     }
     topology_path.write_text(json.dumps(topology, sort_keys=True) + "\n")
     topology_sha = hashlib.sha256(topology_path.read_bytes()).hexdigest()
-    record = _passing_record()
+    record = _passing_record(
+        helper_evidence=_qualification_helper_evidence_from_identity(
+            helper_identity
+        )
+    )
     record["source"] = _passing_source_evidence()
     record["source"].update({
         "root": str(source),
@@ -973,6 +1426,7 @@ def _materialize_qualification(
         "CCSD_TOPOLOGY_SHA256": release_topology_sha,
         "CCSD_BOUND_CPUS": "24-31",
         "GPU4PYSCF_NUMA": "3",
+        "CCSD_SCONTROL_PATH": helper_identity["configured_path"],
     }
     _TEST_RELEASE_RUNTIME.clear()
     _TEST_RELEASE_RUNTIME.update({
@@ -981,6 +1435,7 @@ def _materialize_qualification(
         "pid": 42002,
         "host": "compute-1-6",
         "affinity": "24-31",
+        "thread_affinity": _thread_affinity_evidence(),
         "mems_allowed_list": "3",
         "gpu_node_cpulist": "24-31,88-95",
         "kernel_memory_policy": {
@@ -1007,6 +1462,10 @@ def _materialize_qualification(
                 / "run_mtu_gint_gate.sbatch"
             ),
         },
+        "slurm_controller_helper": helper_identity,
+        "slurm_controller_loader": _fake_loader_evidence(
+            helper_identity, child_pid=7660
+        ),
         "cuda": {
             "visible_devices_environment": "0",
             "device_count": 1,
@@ -1209,6 +1668,34 @@ def test_a_attestation_rejects_unknown_publication_protocol(tmp_path: Path):
 
 
 @pytest.mark.parametrize(
+    ("field", "delta", "accepted"),
+    (("device", 1, True), ("inode", 1, False)),
+)
+def test_a_attestation_treats_device_as_diagnostic_and_inode_as_identity(
+    tmp_path: Path, field: str, delta: int, accepted: bool,
+):
+    evidence = _materialize_qualification(tmp_path)
+    source = evidence["qualification_source"]
+    attestation_path = source.parent.parent / (
+        f"{source.parent.name}{SNAPSHOT.PUBLICATION_ATTESTATION_SUFFIX}"
+    )
+    attestation = json.loads(attestation_path.read_text())
+    attestation["published_directory_identity"][field] += delta
+    unsigned = dict(attestation)
+    unsigned.pop("attestation_sha256", None)
+    attestation["attestation_sha256"] = GINT_AUDIT.canonical_json_sha256(
+        unsigned
+    )
+    _rewrite_readonly_json(attestation_path, attestation)
+    manifest = json.loads(evidence["qualification_manifest"].read_text())
+    errors, _ = GINT_AUDIT._publication_attestation_checks(
+        manifest, source_root=source
+    )
+    identity_errors = [error for error in errors if "directory identity" in error]
+    assert (not identity_errors) is accepted
+
+
+@pytest.mark.parametrize(
     "raw_pin",
     [
         '{"schema":"x","schema":"y"}\n',
@@ -1339,7 +1826,9 @@ def _configure_consumer_evidence(
         "CCSD_TOPOLOGY_SHA256": topology_sha,
         "CCSD_BOUND_CPUS": "24-31",
         "GPU4PYSCF_NUMA": "3",
+        "CCSD_SCONTROL_PATH": os.environ["CCSD_SCONTROL_PATH"],
     }
+    consumer_helper = GINT_AUDIT.observe_scontrol_helper_identity()
     _TEST_RELEASE_RUNTIME.clear()
     _TEST_RELEASE_RUNTIME.update({
         "schema": GINT_AUDIT.RELEASE_RUNTIME_OBSERVATION_SCHEMA,
@@ -1347,6 +1836,7 @@ def _configure_consumer_evidence(
         "pid": 43002,
         "host": "compute-1-6",
         "affinity": "24-31",
+        "thread_affinity": _thread_affinity_evidence(),
         "mems_allowed_list": "3",
         "gpu_node_cpulist": "24-31,88-95",
         "kernel_memory_policy": {
@@ -1367,6 +1857,10 @@ def _configure_consumer_evidence(
             "CPUs/Task": "64",
             "Command": str(launcher),
         },
+        "slurm_controller_helper": consumer_helper,
+        "slurm_controller_loader": _fake_loader_evidence(
+            consumer_helper, child_pid=7661
+        ),
         "cuda": {
             "visible_devices_environment": "0",
             "device_count": 1,
@@ -1599,6 +2093,54 @@ def test_release_slurm_allocation_must_request_qualification_node(tmp_path: Path
     assert "not pinned to the qualification node" in reasons
 
 
+def test_release_rejects_tampered_controlled_scontrol_identity(tmp_path: Path):
+    evidence = _materialize_qualification(tmp_path)
+    _TEST_RELEASE_RUNTIME["slurm_controller_helper"]["executable"][
+        "sha256"
+    ] = "f" * 64
+    rejected = validate_runtime_performance_gate(
+        evidence["receipt"], **evidence["arguments"]
+    )
+    reasons = "\n".join(rejected["validation_errors"])
+    assert rejected["validated"] is False
+    assert "controlled scontrol helper is invalid" in reasons
+
+
+@pytest.mark.parametrize("tamper", ("writable-lib-directory", "changed-lib-inode"))
+def test_release_rejects_tampered_controlled_scontrol_directory(
+    tmp_path: Path, tamper: str,
+):
+    evidence = _materialize_qualification(tmp_path)
+    library_directory = _TEST_RELEASE_RUNTIME["slurm_controller_helper"][
+        "directories"
+    ]["lib"]
+    if tamper == "writable-lib-directory":
+        library_directory["mode"] = 0o755
+    else:
+        library_directory["directory_identity"]["inode"] += 1
+
+    rejected = validate_runtime_performance_gate(
+        evidence["receipt"], **evidence["arguments"]
+    )
+    reasons = "\n".join(rejected["validation_errors"])
+    assert rejected["validated"] is False
+    assert "controlled scontrol helper" in reasons
+
+
+def test_release_rejects_thread_union_with_vanished_workers(tmp_path: Path):
+    evidence = _materialize_qualification(tmp_path)
+    thread_affinity = _thread_affinity_evidence(("24",))
+    thread_affinity["stable"] = True
+    _TEST_RELEASE_RUNTIME["thread_affinity"] = thread_affinity
+    _TEST_RELEASE_RUNTIME["affinity"] = "24"
+    rejected = validate_runtime_performance_gate(
+        evidence["receipt"], **evidence["arguments"]
+    )
+    reasons = "\n".join(rejected["validation_errors"])
+    assert rejected["validated"] is False
+    assert "thread union does not cover CPUs 24-31" in reasons
+
+
 @pytest.mark.parametrize(
     ("field", "expected_reason"),
     (
@@ -1815,6 +2357,50 @@ def test_replacing_both_receipt_files_is_rejected_by_snapshot_b_pin(
     )
 
 
+@pytest.mark.parametrize("artifact", ("receipt", "release-pin"))
+def test_v1_runtime_artifacts_fail_closed_after_v2_migration(
+    tmp_path: Path, artifact: str,
+):
+    evidence = _materialize_qualification(tmp_path)
+    if artifact == "receipt":
+        path = evidence["receipt"]
+        sidecar = Path(str(path) + ".sha256")
+        value = json.loads(path.read_text())
+        value["schema"] = "gpu4pyscf.gint-selected-runtime-gate-receipt.v1"
+        encoded = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+        path.parent.chmod(0o700)
+        path.chmod(0o600)
+        sidecar.chmod(0o600)
+        path.write_bytes(encoded)
+        sidecar.write_text(
+            f"{hashlib.sha256(encoded).hexdigest()}  {path.name}\n"
+        )
+        path.chmod(0o444)
+        sidecar.chmod(0o444)
+        path.parent.chmod(0o555)
+    else:
+        path = evidence["release_pin"]
+        value = json.loads(path.read_text())
+        value["schema"] = "gpu4pyscf.gint-selected-runtime-release-pin.v1"
+        path.parent.parent.chmod(0o755)
+        path.parent.chmod(0o755)
+        path.chmod(0o644)
+        path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+        path.chmod(0o444)
+        path.parent.chmod(0o555)
+        path.parent.parent.chmod(0o555)
+
+    rejected = validate_runtime_performance_gate(
+        evidence["receipt"], **evidence["arguments"]
+    )
+    assert rejected["validated"] is False
+    reasons = "\n".join(rejected["validation_errors"])
+    if artifact == "receipt":
+        assert "runtime gate receipt schema mismatch" in reasons
+    else:
+        assert "release pin does not bind the exact qualification receipt" in reasons
+
+
 def test_release_pin_or_source_change_requires_new_snapshot_b(tmp_path: Path):
     evidence = _materialize_qualification(tmp_path)
     release_source = evidence["release_source"]
@@ -2002,6 +2588,23 @@ def test_gate_requires_fail_closed_selected_provider_stream_contract():
 
     failed = {item["id"] for item in decision["checks"] if not item["passed"]}
     assert "selected_provider_stream_safety" in failed
+
+
+def test_gate_requires_stable_qualification_scontrol_identity():
+    record = _passing_record()
+    record["slurm_controller_helper"]["end"]["executable"][
+        "directory_identity"
+    ]["inode"] += 1
+
+    decision = GATE.evaluate_gate(record)
+
+    helper_check = next(
+        item for item in decision["checks"]
+        if item["id"] == "controlled_slurm_helper"
+    )
+    assert helper_check["scope"] == "qualification"
+    assert helper_check["passed"] is False
+    assert decision["qualification_passed"] is False
 
 
 def test_gate_keeps_correctness_separate_from_pending_performance_audit():
@@ -2363,6 +2966,8 @@ def test_mtu_launcher_is_snapshot_aware_and_physical8_guarded():
     assert 'COLUMN_KERNEL="${GINT_COLUMN_KERNEL:-reference}"' in text
     assert '--column-kernel "${COLUMN_KERNEL}"' in text
     assert "grouped selected-column prototype cannot consume" in text
+    assert 'export CCSD_SCONTROL_PATH="${EXPECTED_SCONTROL_PATH}"' in text
+    assert "control-tools/slurm-23.02.4-local-rpath-v1/lib" in text
 
 
 def test_dry_run_records_thresholds_and_does_not_write_output(tmp_path: Path):

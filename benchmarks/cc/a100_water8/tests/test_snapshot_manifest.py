@@ -357,6 +357,7 @@ def _release_pin(
             "memory_policy": "preferred: 3",
             "topology_path_template": "test",
             "qualification_topology_fingerprint_sha256": "2" * 64,
+            "slurm_controller_helper": {},
         },
         "runtime": {
             "libgint_sha256": "3" * 64,

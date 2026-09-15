@@ -25,6 +25,8 @@ try:
         SELECTED_COLUMNS_SYMBOL,
         SELECTED_DIAGONAL_SYMBOL,
         SELECTED_WORKSPACE_SIZE_SYMBOL,
+        GINT_GATE_RESULT_SCHEMA,
+        SCONTROL_QUALIFICATION_EVIDENCE_SCHEMA,
         evaluate_gate,
     )
 except ImportError:
@@ -43,6 +45,10 @@ except ImportError:
     SELECTED_WORKSPACE_SIZE_SYMBOL = (
         _gate_module.SELECTED_WORKSPACE_SIZE_SYMBOL
     )
+    GINT_GATE_RESULT_SCHEMA = _gate_module.GINT_GATE_RESULT_SCHEMA
+    SCONTROL_QUALIFICATION_EVIDENCE_SCHEMA = (
+        _gate_module.SCONTROL_QUALIFICATION_EVIDENCE_SCHEMA
+    )
 
 from gpu4pyscf.cc.gint_transfer_audit import (
     RELEASE_PIN_RELATIVE_PATH,
@@ -50,9 +56,14 @@ from gpu4pyscf.cc.gint_transfer_audit import (
     RUNTIME_GATE_PAYLOAD_SCHEMA,
     RUNTIME_GATE_RECEIPT_SCHEMA,
     RUNTIME_GATE_SIDECAR_SUFFIX,
+    SCONTROL_HELPER_SCHEMA,
+    SCONTROL_LOADER_EVIDENCE_SCHEMA,
     canonical_json_sha256,
     expected_runtime_release_pin,
+    observe_scontrol_helper_identity,
     release_source_tree_digest,
+    scontrol_helper_portable_binding,
+    scontrol_loader_portable_binding,
     source_snapshot_normalization_errors,
 )
 
@@ -184,6 +195,8 @@ def build_receipt_payload(
         result_path, name="qualification result"
     )
     result = _json_object(result_bytes, name="qualification result")
+    if result.get("schema") != GINT_GATE_RESULT_SCHEMA:
+        raise ValueError("qualification result schema mismatch")
     decision = evaluate_gate(result)
     if decision.get("correctness_passed") is not True:
         raise ValueError("qualification result failed the correctness gate")
@@ -388,6 +401,53 @@ def build_receipt_payload(
     if not isinstance(timing.get("direct_cd_end_to_end_seconds"), (int, float)):
         raise ValueError("qualification timing evidence is missing")
 
+    helper_evidence = result.get("slurm_controller_helper") or {}
+    if (
+        helper_evidence.get("schema")
+        != SCONTROL_QUALIFICATION_EVIDENCE_SCHEMA
+        or helper_evidence.get("helper_schema") != SCONTROL_HELPER_SCHEMA
+        or helper_evidence.get("loader_schema")
+        != SCONTROL_LOADER_EVIDENCE_SCHEMA
+        or helper_evidence.get("stable_during_run") is not True
+        or helper_evidence.get("errors") != []
+    ):
+        raise ValueError("qualification controlled scontrol evidence is invalid")
+    try:
+        helper_start = scontrol_helper_portable_binding(
+            helper_evidence.get("start")
+        )
+        helper_end = scontrol_helper_portable_binding(
+            helper_evidence.get("end")
+        )
+        helper_recorded = helper_evidence.get("portable_binding")
+        loader_start = scontrol_loader_portable_binding(
+            (helper_evidence.get("start_query") or {}).get("loader_evidence")
+        )
+        loader_end = scontrol_loader_portable_binding(
+            (helper_evidence.get("end_query") or {}).get("loader_evidence")
+        )
+        loader_recorded = helper_evidence.get("portable_loader_binding")
+        helper_at_issuance = scontrol_helper_portable_binding(
+            observe_scontrol_helper_identity(require_library_search_path=False)
+        )
+    except Exception as exc:
+        raise ValueError(
+            f"qualification controlled scontrol binding is invalid: {exc}"
+        ) from exc
+    if not (
+        helper_start == helper_end == helper_recorded == helper_at_issuance
+    ):
+        raise ValueError(
+            "controlled scontrol helper changed between qualification and receipt"
+        )
+    if not (
+        loader_start == loader_end == loader_recorded
+        and loader_recorded.get("query_helper") == helper_recorded
+    ):
+        raise ValueError(
+            "actual scontrol library mapping changed during qualification"
+        )
+
     return {
         "schema": RUNTIME_GATE_PAYLOAD_SCHEMA,
         "status": "passed",
@@ -445,6 +505,8 @@ def build_receipt_payload(
                 "mems_allowed_list": topology.get("mems_allowed_list"),
                 "benchmark_track": topology.get("benchmark_track"),
             },
+            "slurm_controller_helper": helper_recorded,
+            "slurm_controller_loader": loader_recorded,
         },
         "transfer_audit": {
             "ledger": ledger,

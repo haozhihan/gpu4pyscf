@@ -81,6 +81,25 @@ def test_candidate_validation_launchers_pin_fixed_mtu_node(name: str) -> None:
 
 @pytest.mark.parametrize(
     "name",
+    (
+        "run_mtu_gint_gate.sbatch",
+        "run_mtu_benchmark.sbatch",
+        "run_mtu_counterpoise.sbatch",
+    ),
+)
+def test_runtime_gate_launchers_pin_controlled_scontrol_helper(name: str) -> None:
+    text = (ROOT / name).read_text(encoding="utf-8")
+
+    assert 'export CCSD_SCONTROL_PATH="${EXPECTED_SCONTROL_PATH}"' in text
+    assert "control-tools/slurm-23.02.4-local-rpath-v1/bin/scontrol" in text
+    assert "control-tools/slurm-23.02.4-local-rpath-v1/lib" in text
+    assert 'LD_LIBRARY_PATH="${SCONTROL_LIBRARY_DIR}:' in text or (
+        'RUNTIME_LIB_DIRS="${SCONTROL_LIBRARY_DIR}' in text
+    )
+
+
+@pytest.mark.parametrize(
+    "name",
     sorted(
         set(MANDATORY_SNAPSHOT_LAUNCHERS)
         | set(SNAPSHOT_OPTIONAL_LAUNCHERS)

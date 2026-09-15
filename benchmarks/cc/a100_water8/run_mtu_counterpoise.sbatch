@@ -37,6 +37,14 @@ import sys
 print(pathlib.Path(sys.argv[1]).expanduser().resolve())
 PY
 )"
+EXPECTED_SCONTROL_PATH="${TASK_ROOT}/control-tools/slurm-23.02.4-local-rpath-v1/bin/scontrol"
+if [[ -n "${CCSD_SCONTROL_PATH:-}" && \
+      "${CCSD_SCONTROL_PATH}" != "${EXPECTED_SCONTROL_PATH}" ]]; then
+  echo "CCSD_SCONTROL_PATH must be ${EXPECTED_SCONTROL_PATH}" >&2
+  exit 2
+fi
+export CCSD_SCONTROL_PATH="${EXPECTED_SCONTROL_PATH}"
+SCONTROL_LIBRARY_DIR="${TASK_ROOT}/control-tools/slurm-23.02.4-local-rpath-v1/lib"
 case "${SOURCE_ROOT}" in
   "${TASK_ROOT}"/snapshots/*/source) ;;
   *)
@@ -220,9 +228,9 @@ if (( ${#CUDA_LIBRARY_ROOTS[@]} )); then
 fi
 VIRTUAL_ENV_ROOT="$(cd -- "$(dirname -- "${PYTHON_BIN}")/.." && pwd)"
 CUDA_LOADER_LIB="${CCSD_CUDA_LOADER_LIB:-$(dirname -- "${VIRTUAL_ENV_ROOT}")/cuda-loader-lib}"
-RUNTIME_LIB_DIRS="${CUDA_LIB_DIRS}"
+RUNTIME_LIB_DIRS="${SCONTROL_LIBRARY_DIR}${CUDA_LIB_DIRS:+:${CUDA_LIB_DIRS}}"
 if [[ -d "${CUDA_LOADER_LIB}" ]]; then
-  RUNTIME_LIB_DIRS="${CUDA_LOADER_LIB}${RUNTIME_LIB_DIRS:+:${RUNTIME_LIB_DIRS}}"
+  RUNTIME_LIB_DIRS="${SCONTROL_LIBRARY_DIR}:${CUDA_LOADER_LIB}${CUDA_LIB_DIRS:+:${CUDA_LIB_DIRS}}"
 fi
 if [[ -n "${RUNTIME_LIB_DIRS}" ]]; then
   export LD_LIBRARY_PATH="${RUNTIME_LIB_DIRS}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"

@@ -16,6 +16,14 @@ set -euo pipefail
 TASKDIR=/mnt/mridata/vxu/thu-likun/hanhaozhi/agent-ccsd-a100-thc-rr-20260913
 BASELINE=/mnt/mridata/vxu/thu-likun/hanhaozhi/agent-ccsd-baseline-20260913
 VENV="${BASELINE}/.venv"
+EXPECTED_SCONTROL_PATH="${TASKDIR}/control-tools/slurm-23.02.4-local-rpath-v1/bin/scontrol"
+if [[ -n "${CCSD_SCONTROL_PATH:-}" && \
+      "${CCSD_SCONTROL_PATH}" != "${EXPECTED_SCONTROL_PATH}" ]]; then
+  echo "CCSD_SCONTROL_PATH must be ${EXPECTED_SCONTROL_PATH}" >&2
+  exit 2
+fi
+export CCSD_SCONTROL_PATH="${EXPECTED_SCONTROL_PATH}"
+SCONTROL_LIBRARY_DIR="${TASKDIR}/control-tools/slurm-23.02.4-local-rpath-v1/lib"
 SOURCE_ROOT="${CCSD_SOURCE_ROOT:?set CCSD_SOURCE_ROOT to an immutable MTU snapshot source directory}"
 case "${SOURCE_ROOT}" in
   "${TASKDIR}"/snapshots/*/source) ;;
@@ -143,7 +151,7 @@ done
 CUDA_SITE="${VENV}/lib/python3.11/site-packages"
 CUDA_LIB_DIRS=$(find "${CUDA_SITE}/nvidia" "${CUDA_SITE}/cutensor" \
   -maxdepth 2 -type d -name lib -print | paste -sd: -)
-export LD_LIBRARY_PATH="${BASELINE}/cuda-loader-lib:${CUDA_LIB_DIRS}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+export LD_LIBRARY_PATH="${SCONTROL_LIBRARY_DIR}:${BASELINE}/cuda-loader-lib:${CUDA_LIB_DIRS}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 export PYTHONPATH="${SOURCE_ROOT}"
 export CUPY_CACHE_DIR="${TASKDIR}/.cache/cupy"
 export PYSCF_TMPDIR="${TASKDIR}/tmp"

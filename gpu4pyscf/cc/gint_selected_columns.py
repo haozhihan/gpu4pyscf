@@ -48,6 +48,7 @@ from gpu4pyscf.cc.gint_pair_columns import (
 )
 from gpu4pyscf.cc.gint_transfer_audit import (
     GINTSetupTransferAudit,
+    observe_process_thread_affinity,
     validate_runtime_performance_gate,
 )
 
@@ -697,10 +698,12 @@ def _release_process_context(cupy: Any) -> dict[str, Any]:
         "CCSD_BOUND_CPUS",
         "GPU4PYSCF_NUMA",
     )
+    thread_affinity = observe_process_thread_affinity()
     return {
         "pid": os.getpid(),
         "host": socket.gethostname(),
-        "affinity": _format_cpu_list(os.sched_getaffinity(0)),
+        "affinity": thread_affinity["union_affinity"],
+        "thread_affinity": thread_affinity,
         "gpu_pci_bus_id": bus_id,
         "gpu_numa_node": numa_node,
         "environment": {name: os.getenv(name) for name in environment_names},

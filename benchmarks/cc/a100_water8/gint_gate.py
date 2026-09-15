@@ -31,6 +31,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
+from gpu4pyscf.cc.gint_transfer_audit import (
+    SCONTROL_HELPER_SCHEMA,
+    SCONTROL_LOADER_EVIDENCE_SCHEMA,
+    _query_slurm_controller,
+    observe_scontrol_helper_identity,
+    scontrol_helper_portable_binding,
+    scontrol_loader_portable_binding,
+)
+
 
 ROOT = Path(__file__).resolve().parent
 REPOSITORY_ROOT = ROOT.parents[2]
@@ -100,6 +109,11 @@ EXPECTED_RYS7_WORKSPACE_BYTES = (
     * RYS7_GOUT_DOUBLES
     * 8
 )
+SCONTROL_QUALIFICATION_EVIDENCE_SCHEMA = (
+    "gpu4pyscf.controlled-scontrol-qualification-evidence.v2"
+)
+GINT_GATE_RESULT_SCHEMA = "gpu4pyscf.water2.gint-direct-cd-gate.v3"
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -126,6 +140,80 @@ def _require_canonical_pristine() -> bool:
     return os.getenv(
         "CCSD_REQUIRE_CANONICAL_PRISTINE", ""
     ).strip().lower() in {"1", "true", "yes"}
+
+
+def slurm_controller_helper_evidence() -> dict[str, Any]:
+    """Capture helper identity and its actual loader mapping before work."""
+
+    start = observe_scontrol_helper_identity()
+    errors: list[str] = []
+    start_query: dict[str, Any] | None = None
+    try:
+        job_id = os.getenv("SLURM_JOB_ID")
+        if not isinstance(job_id, str) or not job_id.isdigit():
+            raise ValueError("SLURM_JOB_ID is missing or invalid")
+        start_query = _query_slurm_controller(
+            job_id, helper_identity=start
+        )
+    except Exception as exc:
+        errors.append(f"initial controlled scontrol query failed: {exc}")
+    return {
+        "schema": SCONTROL_QUALIFICATION_EVIDENCE_SCHEMA,
+        "helper_schema": SCONTROL_HELPER_SCHEMA,
+        "loader_schema": SCONTROL_LOADER_EVIDENCE_SCHEMA,
+        "start": start,
+        "start_query": start_query,
+        "end": None,
+        "end_query": None,
+        "portable_binding": None,
+        "portable_loader_binding": None,
+        "stable_during_run": False,
+        "errors": errors,
+    }
+
+
+def finish_slurm_controller_helper_evidence(evidence: dict[str, Any]) -> bool:
+    """Re-read the helper and require one stable portable identity."""
+
+    errors = list(evidence.get("errors") or [])
+    end = observe_scontrol_helper_identity()
+    evidence["end"] = end
+    end_query: dict[str, Any] | None = None
+    try:
+        job_id = os.getenv("SLURM_JOB_ID")
+        if not isinstance(job_id, str) or not job_id.isdigit():
+            raise ValueError("SLURM_JOB_ID is missing or invalid")
+        end_query = _query_slurm_controller(job_id, helper_identity=end)
+    except Exception as exc:
+        errors.append(f"final controlled scontrol query failed: {exc}")
+    evidence["end_query"] = end_query
+    try:
+        start_binding = scontrol_helper_portable_binding(evidence.get("start"))
+        end_binding = scontrol_helper_portable_binding(end)
+        if start_binding != end_binding:
+            errors.append("controlled scontrol helper changed during the run")
+        else:
+            evidence["portable_binding"] = start_binding
+    except Exception as exc:
+        errors.append(f"controlled scontrol helper evidence is invalid: {exc}")
+    try:
+        start_loader = scontrol_loader_portable_binding(
+            (evidence.get("start_query") or {}).get("loader_evidence")
+        )
+        end_loader = scontrol_loader_portable_binding(
+            (end_query or {}).get("loader_evidence")
+        )
+        if start_loader != end_loader:
+            errors.append("actual scontrol library mapping changed during the run")
+        elif start_loader.get("query_helper") != evidence.get("portable_binding"):
+            errors.append("actual scontrol mapping differs from helper identity")
+        else:
+            evidence["portable_loader_binding"] = start_loader
+    except Exception as exc:
+        errors.append(f"controlled scontrol loader evidence is invalid: {exc}")
+    evidence["errors"] = errors
+    evidence["stable_during_run"] = not errors
+    return not errors
 
 
 def snapshot_evidence(
@@ -904,6 +992,50 @@ def evaluate_gate(record: dict[str, Any]) -> dict[str, Any]:
         "MTU topology guard evidence is missing or failed",
         topology.get("reasons"),
     )
+    helper = record.get("slurm_controller_helper") or {}
+    helper_start = helper.get("start") or {}
+    helper_end = helper.get("end") or {}
+    helper_binding_valid = False
+    loader_binding_valid = False
+    try:
+        helper_binding_valid = (
+            scontrol_helper_portable_binding(helper_start)
+            == scontrol_helper_portable_binding(helper_end)
+            == helper.get("portable_binding")
+        )
+    except Exception:
+        helper_binding_valid = False
+    try:
+        loader_binding_valid = (
+            scontrol_loader_portable_binding(
+                (helper.get("start_query") or {}).get("loader_evidence")
+            )
+            == scontrol_loader_portable_binding(
+                (helper.get("end_query") or {}).get("loader_evidence")
+            )
+            == helper.get("portable_loader_binding")
+        ) and (
+            helper.get("portable_loader_binding", {}).get("query_helper")
+            == helper.get("portable_binding")
+        )
+    except Exception:
+        loader_binding_valid = False
+    check(
+        "controlled_slurm_helper",
+        helper.get("schema") == SCONTROL_QUALIFICATION_EVIDENCE_SCHEMA
+        and helper.get("helper_schema") == SCONTROL_HELPER_SCHEMA
+        and helper.get("loader_schema") == SCONTROL_LOADER_EVIDENCE_SCHEMA
+        and helper.get("stable_during_run") is True
+        and helper.get("errors") == []
+        and helper_binding_valid
+        and loader_binding_valid,
+        (
+            "controlled scontrol executable, sealed directory chain, or actual "
+            "libslurmfull mapping is unavailable"
+        ),
+        helper,
+        scope="qualification",
+    )
     hardware = record.get("hardware", {})
     check(
         "fixed_hardware",
@@ -1553,7 +1685,7 @@ def run(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
     case = load_water2_case()
     if args.dry_run:
         record = {
-            "schema": "gpu4pyscf.water2.gint-direct-cd-gate.v2",
+            "schema": GINT_GATE_RESULT_SCHEMA,
             "dry_run": True,
             "case": case,
             "thresholds": {
@@ -1589,12 +1721,13 @@ def run(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
 
     output.parent.mkdir(parents=True, exist_ok=True)
     record: dict[str, Any] = {
-        "schema": "gpu4pyscf.water2.gint-direct-cd-gate.v2",
+        "schema": GINT_GATE_RESULT_SCHEMA,
         "created_utc": _utc_now(),
         "status": "running",
         "command": list(sys.argv),
         "source": source_evidence(),
         "topology": topology_evidence(args.topology_record),
+        "slurm_controller_helper": slurm_controller_helper_evidence(),
         "hardware": hardware_evidence(),
         "case": case,
         "thresholds": {
@@ -1855,6 +1988,9 @@ def run(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
         })
     finally:
         record["finished_utc"] = _utc_now()
+        finish_slurm_controller_helper_evidence(
+            record["slurm_controller_helper"]
+        )
         finish_source_evidence(record["source"])
         finish_topology_evidence(record["topology"])
         record["gate_decision"] = evaluate_gate(record)

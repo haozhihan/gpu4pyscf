@@ -118,7 +118,7 @@ RUNTIME_VALIDATION_EVIDENCE_KEYS = {
     "build_verification_bytes",
     "build_verification_payload_sha256",
 }
-RELEASE_PIN_SCHEMA = "gpu4pyscf.gint-selected-runtime-release-pin.v1"
+RELEASE_PIN_SCHEMA = "gpu4pyscf.gint-selected-runtime-release-pin.v2"
 RELEASE_PIN_RELATIVE_PATH = Path("gpu4pyscf/cc/gint_release_pin.json")
 GINT_RELEASE_LINEAGE_KEYS = {
     "schema",
