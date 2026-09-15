@@ -1,6 +1,6 @@
 {
   "schema": "gpu4pyscf.water8.implementation-status.v2",
-  "as_of_utc": "2026-09-15T04:53:25Z",
+  "as_of_utc": "2026-09-15T06:00:17.502542+00:00",
   "purpose": "Candid implementation and MTU evidence ledger for the fixed WATER27 H2O8d2d single-A100 CCSD project.",
   "claim_policy": {
     "ten_x_claim_allowed": false,
@@ -18,9 +18,9 @@
     "frozen_baseline_commit": "a89b3ae018d4e82968323ef95645d91adde294aa",
     "feature_worktree": "analysis/research/ccsd/gpu4pyscf-a100-thc-rr",
     "g0_worktree": "analysis/research/ccsd/gpu4pyscf-g0-baseline",
-    "feature_source_state": "rr-water4-tight-cutoff-continuation-thc-full-pair-total-identity-portable-snapshot-validation-and-fused-wvvvv-development",
+    "feature_source_state": "snapshot-a-qualification-queued-rr-water4-continuation-and-thc-audit-only-development",
     "feature_performance_eligible": false,
-    "feature_head_before_ledger_update": "4e678784ee0143fa7dac14ca755de69474cb718e",
+    "feature_head_before_ledger_update": "92008c580fb90c9c49f7cf1f6b087726650df9dd",
     "merged_implementation_commits": {
       "fused_r123": "29ceab6",
       "fixed_gpu_test_node": "56291e7",
@@ -64,8 +64,48 @@
       "receipt_bound_complete_thc_launcher": "020cb40",
       "rr_water4_rank_boundary_continuation": "c1b20df",
       "rr_continuation_numeric_gate_closure": "2af67f5",
-      "rr_orthogonality_threshold_boundary_test": "4e67878"
-    }
+      "rr_orthogonality_threshold_boundary_test": "4e67878",
+      "receipt_bound_gate_ledger": "92008c5"
+    },
+    "current_snapshot_a_head": "92008c580fb90c9c49f7cf1f6b087726650df9dd"
+  },
+  "current_qualification_observation": {
+    "evidence_state": "local_measured",
+    "snapshot_role": "immutable qualification snapshot A; not yet a release-B or performance-qualified source",
+    "source_tree_sha256": "29a74a4500af78f10517a09b16d224612088b626f77d1b3e96af8a198996d4dd",
+    "runtime_bundle_id": "70ee88f75a6af596e931921614f7b71d45f89d7ce021cdeb0e4e4e8bd7514e7f",
+    "manifest_sha256": "7144fdb0870a83399369df0fa3b320e5220c36f7617d3e53892290cdd97f458e",
+    "qualification_job": {
+      "job_id": 63020,
+      "job_name": "gint-water2-gate",
+      "purpose": "reference selected-GINT WATER2 qualification",
+      "requested_node": "compute-1-0",
+      "state": "PENDING",
+      "reason": "Priority",
+      "elapsed": "00:00:00",
+      "eligible_time_mtu": "2026-09-15T01:54:19",
+      "scheduler_estimated_start_mtu": "2026-09-17T01:34:14",
+      "hold_released": true,
+      "dependency": null
+    },
+    "submission_audit": "results/mtu/qualification-92008.json",
+    "release_audit": "results/mtu/qualification-63020-release.json",
+    "release_audit_sha256": "56920cc0ae007295816316163b09ab86af1604a299bd8100d392be4fae944285",
+    "receipt_issued": false,
+    "release_snapshot_b_created": false,
+    "formal_performance_eligible": false,
+    "claim_limit": "Volatile queue-control plus immutable-source readiness only; the job has not run and supplies no numerical, accuracy, release-B, or performance result.",
+    "captured_utc": "2026-09-15T05:55:43Z",
+    "captured_mtu": "2026-09-15T01:55:43-04:00",
+    "volatile_scheduler_observation": true,
+    "ttl_note": "Re-query squeue/scontrol for live state; immutable snapshot and audit hashes remain stable.",
+    "qualified_source_head": "92008c580fb90c9c49f7cf1f6b087726650df9dd",
+    "scope": "reference selected-GINT WATER2 qualification only",
+    "submission_audit_sha256": "7143e38b13f1bbb375d0a93d7f59bbdb95a3951ef36d6f6779e28537717d290d",
+    "formal_accuracy_eligible": false,
+    "result_available": false,
+    "qualifies_snapshot_a_only": true,
+    "does_not_qualify_later_ledger_commit_or_mutable_worktree": true
   },
   "contract": {
     "evidence_state": "source_reported",
@@ -255,6 +295,28 @@
       "grouped_correctness_job_id": "62614",
       "postqualification_orchestrator_job_id": "62615",
       "note": "A2 is the exact merged implementation snapshot. Performance eligibility remains false until reference qualification, receipt-bound B release, and the required fixed-node numerical gates complete."
+    },
+    {
+      "id": "candidate-snapshot-qualification-29a74a45",
+      "source_state": "immutable-candidate-v3-runtime-closed-reference-qualification-queued",
+      "deployment_profile": "candidate",
+      "source_git_head": "92008c580fb90c9c49f7cf1f6b087726650df9dd",
+      "tree_sha256": "29a74a4500af78f10517a09b16d224612088b626f77d1b3e96af8a198996d4dd",
+      "runtime_bundle_id": "70ee88f75a6af596e931921614f7b71d45f89d7ce021cdeb0e4e4e8bd7514e7f",
+      "manifest_sha256": "7144fdb0870a83399369df0fa3b320e5220c36f7617d3e53892290cdd97f458e",
+      "runtime_contract_validated": true,
+      "read_only": true,
+      "formal_source_eligible": true,
+      "formal_performance_eligible": false,
+      "qualification_job_id": "63020",
+      "qualification_job_state": "PENDING",
+      "qualification_job_reason": "Priority",
+      "qualification_node": "compute-1-0",
+      "hold_released": true,
+      "note": "The selected-GINT reference qualification has not run. Receipt issuance, release snapshot B, release-gate validation, G4/G5 consumers, and every performance claim remain blocked.",
+      "qualifies_snapshot_a_only": true,
+      "does_not_qualify_later_ledger_commit_or_mutable_worktree": true,
+      "queue_observation_volatile": true
     }
   ],
   "gates": [
@@ -417,8 +479,8 @@
       "id": "G3",
       "name": "tight-direct-cholesky",
       "evidence_state": "local_measured",
-      "state": "published-a2-formal-qualification-failed-before-evidence-portable-validator-fix-verified-separately",
-      "decision": "supersede-the-failed-a2-chain-and-use-the-portable-validator-for-any-new-qualification-snapshot",
+      "state": "snapshot-a-reference-qualification-queued",
+      "decision": "await-job-63020-terminal-result-then-issue-receipt-and-release-b-only-on-success",
       "method_class": "integral-factorized",
       "acceptance_table": "I",
       "implemented": [
@@ -439,9 +501,15 @@
         "Attributing the silent seven-second failures of jobs 62612 and 62613 to the old cross-client st_dev check is a high-confidence inference from job 62685 on the same snapshot, not direct proof from their empty logs."
       ],
       "missing": [
-        "A new formal reference qualification and receipt-bound B release gate after superseding failed jobs 62612-62615",
+        "Job 63020 terminal COMPLETED/0:0 result and log validation, followed by write-once GINT receipt, release pin, immutable release snapshot B, and receipt-bound B release gate",
         "A100 grouped selected-count 1/2/8/32 and Rys-7 correctness-only A/B from a new dependency chain",
         "Water2/water4/water8 thresholds 1e-4, 1e-6, and 1e-8 with energy errors, followed by WATER8 counterpoise error"
+      ],
+      "verified": [
+        "Snapshot A 29a74a45... at source head 92008c5 is immutable and runtime-closed with bundle 70ee88f7...; Job 63020 is the reference selected-GINT WATER2 qualification on compute-1-0."
+      ],
+      "active": [
+        "Job 63020: PENDING Priority, elapsed 00:00:00, compute-1-0, one A100, 64 CPUs, 110G; hold released after source/runtime/launcher review."
       ]
     },
     {
@@ -1369,7 +1437,7 @@
     "python_compile_passed": true,
     "git_diff_and_whitespace_passed": true,
     "candidate_mtu_validation_completed": false,
-    "known_evidence_gap": "No current snapshot has completed fixed-node reference qualification, GPU tests, grouped correctness A/B, or receipt-bound B release validation; the failed/cancelled 62612-62615 chain is superseded and any replacement must use the portable cross-client validator.",
+    "known_evidence_gap": "Snapshot A 29a74a45... is immutable/runtime-closed and Job 63020 is queued on compute-1-0, but the job has not run. No selected-GINT receipt, release snapshot B, release-gate result, grouped A/B, or receipt-bound G4/G5 result exists.",
     "fused_r123_review": "no-P0-P1-P2",
     "grouped_gint_review": "no-P0-P1-P2",
     "a2_runtime_build_and_snapshot_validation": "passed",
@@ -3016,6 +3084,12 @@
       "evidence_state": "source_reported",
       "statement": "Job 62688 validates the older published snapshot on compute-1-4 with the 6fe3e9e portable rule: device 48 versus 53 is diagnostic, while the shared inode 83972272889 matches and validation returns valid=true.",
       "claim_limit": "Infrastructure validation only; jobs 62678, 62684, and 62685 produced no scientific result."
+    },
+    {
+      "evidence_state": "local_measured",
+      "statement": "Snapshot A 29a74a45... is immutable/runtime-closed and its reference selected-GINT qualification Job 63020 was released from user hold into PENDING Priority on compute-1-0.",
+      "evidence": "results/mtu/qualification-92008.json and results/mtu/qualification-63020-release.json",
+      "claim_limit": "Queue-control and packaging evidence only; Job 63020 has not run and establishes no numerical, release-B, or performance result."
     }
   ],
   "performance_claim": {
@@ -3058,7 +3132,9 @@
   },
   "update_protocol": {
     "running_jobs": [],
-    "pending_jobs": [],
+    "pending_jobs": [
+      "63020 Snapshot A reference selected-GINT WATER2 qualification: PENDING Priority on compute-1-0, elapsed 00:00:00; hold released 2026-09-15T01:54:19-04:00."
+    ],
     "on_job_completion": [
       "Sync raw stdout/stderr, result JSON, checkpoint, topology record, and Slurm accounting.",
       "Hash every synced file and append it to the artifact inventory.",
@@ -3067,6 +3143,7 @@
       "Do not compute a median, CV, or speedup until the required matched repetitions exist."
     ],
     "next_gate_actions": [
+      "When Job 63020 reaches a terminal state, first seal its Slurm/result/log evidence. Only COMPLETED/0:0 may issue the write-once receipt and release pin, create release snapshot B, and run the receipt-bound B release gate; otherwise preserve the failure and do not launch G4/G5 consumers.",
       "Preserve jobs 62612 and 62613 as failed terminal scheduler evidence and keep their cause explicitly classified as a high-confidence inference rather than direct log proof.",
       "Treat cancelled jobs 62614 and 62615 as superseded; any resumed formal GINT qualification requires a new portable-validator snapshot and dependency chain.",
       "Do not run WATER8 FNO: jobs 62630-62633 triggered the WATER4 stop rule.",
