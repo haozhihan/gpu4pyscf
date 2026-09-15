@@ -1,10 +1,10 @@
 {
   "schema": "gpu4pyscf.water8.implementation-status.v2",
-  "as_of_utc": "2026-09-15T07:23:49.634648+00:00",
+  "as_of_utc": "2026-09-15T08:22:47.946271+00:00",
   "purpose": "Candid implementation and MTU evidence ledger for the fixed WATER27 H2O8d2d single-A100 CCSD project.",
   "claim_policy": {
     "ten_x_claim_allowed": false,
-    "reason": "The exact-node canonical denominator is established and both RR cutoffs pass WATER2, but the converged WATER4 cutoffs 1e-7/rank 1495 and 1e-8/rank 1914 fail the 1e-4 Eh correlation-energy gate and are slower than canonical, so those candidates cannot enter WATER8. Their ranks are below the contractual 0.8*OV boundary of 3392, so job 62674 does not stop the RR route; actual 1e-9/1e-11 WATER4 ranks and adaptive converged gates remain required. The WATER4 one-cycle backend A/B is development-only, FNO stopped at WATER4, no WATER8 candidate or eight-monomer counterpoise result exists, and every THC production/performance flag remains false. Commit 30ddc82 has only exact local Wvvvv algebra/workspace evidence; its A100 gates remain pending and it carries no speed claim.",
+    "reason": "G1 is numerically/resource qualified but WATER8 has only one paired timing observation. G3 now has an unexecuted receipt-bound three-threshold DAG, G4 has a tested continuation state machine but no qualifying WATER4 1e-9/1e-11 results, and G5 has exact plus compressed-amplitude equation identities while accepted fit, molecular, ERI-THC, A100 timing, and counterpoise gates remain open.",
     "evidence_states": [
       "source_reported",
       "local_measured",
@@ -18,9 +18,9 @@
     "frozen_baseline_commit": "a89b3ae018d4e82968323ef95645d91adde294aa",
     "feature_worktree": "analysis/research/ccsd/gpu4pyscf-a100-thc-rr",
     "g0_worktree": "analysis/research/ccsd/gpu4pyscf-g0-baseline",
-    "feature_source_state": "published-eq36-algebra-gate-passed-algorithms8-10-version-of-record-numbering-audited-production-disabled-plus-snapshot-a-qualification-queued",
+    "feature_source_state": "g3-dag-g4-state-machine-and-inexact-amplitude-thc-identity-validated-production-disabled-plus-snapshot-a-qualification-queued",
     "feature_performance_eligible": false,
-    "feature_head_before_ledger_update": "80710ecef79310b69a16e83594d042c9be8485f1",
+    "feature_head_before_ledger_update": "aec0d8ba53b971ee7369229f0b0fe8343b74246c",
     "merged_implementation_commits": {
       "fused_r123": "29ceab6",
       "fixed_gpu_test_node": "56291e7",
@@ -68,13 +68,17 @@
       "receipt_bound_gate_ledger": "92008c5",
       "published_thc_omega_d_equation_audit": "1a9eeb3",
       "published_algorithms_8_10_numbering_audit": "268ced2",
-      "published_complete_thc_ledger_numbering_audit": "80710ec"
+      "published_complete_thc_ledger_numbering_audit": "80710ec",
+      "rr_g4_state_machine_integration_tests": "38e846f",
+      "inexact_amplitude_thc_equation_identity": "bfe9fc8",
+      "tight_cd_g3_receipt_bound_dag": "5dae27b",
+      "tight_cd_g3_control_binding_fix": "aec0d8b"
     },
     "current_snapshot_a_head": "92008c580fb90c9c49f7cf1f6b087726650df9dd",
-    "previous_ledger_head": "91b96b2622ad71e831d9473e35ba5d436d89e9b6",
-    "previous_ledger_head_role": "published Algorithms 8-10 endpoint-numbering ledger after immutable Snapshot A; Job 63020 remains bound to 92008c5",
-    "head_before_this_ledger_update": "80710ecef79310b69a16e83594d042c9be8485f1",
-    "head_before_this_ledger_update_role": "complete Algorithms 1-10 assembler ledger numbering audit; immutable Snapshot A bytes remain unchanged"
+    "previous_ledger_head": "60b4a4b618d4d6148a5342cb9f45dec02c02e773",
+    "previous_ledger_head_role": "published Algorithms 8-10 and complete-assembler numbering ledger; immutable Snapshot A and queued Job 63020 remain bound to 92008c5",
+    "head_before_this_ledger_update": "aec0d8ba53b971ee7369229f0b0fe8343b74246c",
+    "head_before_this_ledger_update_role": "G3 DAG plus G4 continuation-state and compressed amplitude-THC equation-identity tests; no new immutable runtime snapshot or MTU result"
   },
   "current_qualification_observation": {
     "evidence_state": "local_measured",
@@ -560,7 +564,8 @@
         "Grouped/reference selection is explicit through provider, RRCCSD, benchmark, counterpoise, and GINT-gate interfaces.",
         "Grouped mode is fail closed for release receipts and performance eligibility until A100 A/B validation.",
         "GPU tests cover selected counts 1/2/8/32 and a cc-pVTZ Rys-7 repeated-ket case with real Schwarz screening.",
-        "Commit 6fe3e9e keeps the positive matching inode as the strict portable NFS directory binding while recording cross-client st_dev equality only as diagnostic metadata; job 62688 validates that behavior on compute-1-4 against the older published snapshot."
+        "Commit 6fe3e9e keeps the positive matching inode as the strict portable NFS directory binding while recording cross-client st_dev equality only as diagnostic metadata; job 62688 validates that behavior on compute-1-4 against the older published snapshot.",
+        "Commits 5dae27b and aec0d8b add a receipt-bound plan/preview-submit/executed-receipt/analyze DAG for the exact eri_tol grid 1e-4, 1e-6, 1e-8 on WATER2/WATER4. It compares rr_canonical and rr_cd complete RR pipelines on byte-identical serialized RHF orbitals and one RR cutoff, while explicitly recording that their projectors are built independently. Every result is bound to its planned threshold, RR cutoff, receipt node, source, path, and Slurm identity. The result is an A-track CD-increment diagnostic, not a shared-projector or full-space canonical-CD proof; G3 alone never unlocks WATER8."
       ],
       "limitations": [
         "The reference selected-column kernel repeats GOUT construction for multiple pivots sharing one ket shell task.",
@@ -579,7 +584,25 @@
       ],
       "active": [
         "A successful SSH/Slurm poll at 2026-09-15T06:50:43.689037+00:00 directly observed Job 63020 PENDING Priority with elapsed 00:00:00 and no allocated node; Jobs 63068 and 63069 were also PENDING Priority."
-      ]
+      ],
+      "local_verification": {
+        "receipt_bound_tight_cd_dag": {
+          "source_commits": [
+            "5dae27bd0bf4c2a1a8f06c3472a24b7ecc032f1f",
+            "aec0d8ba53b971ee7369229f0b0fe8343b74246c"
+          ],
+          "focused_tests_passed": 15,
+          "related_tests_passed": 67,
+          "failed": 0,
+          "python_compile_passed": true,
+          "git_diff_check_passed": true,
+          "independent_review": "P1 threshold binding and P2 CP-node binding corrected; no remaining P0-P3",
+          "slurm_jobs_submitted": 0,
+          "g3_complete_claim_eligible": false,
+          "water8_unlock_from_g3_alone": false,
+          "scientific_scope": "CD increment inside independently projected complete RR pipelines; A-track only"
+        }
+      }
     },
     {
       "id": "G4",
@@ -604,7 +627,8 @@
         "Job 62676 validates reference versus GEMM for one non-converged WATER4 cycle at rank 1495 and auxiliary/virtual blocks 32; the sub-5% tie selects GEMM/cuBLAS for the next converged run but remains performance-ineligible.",
         "Job 62674 converges both direct-CD WATER4 candidates, but cutoff 1e-7/rank 1495 has 5.26532e-4 Eh correlation error and cutoff 1e-8/rank 1914 has 1.1056808544962493e-4 Eh error; both fail the 1e-4 Eh gate, are slower than the 35.569 s canonical observation, and are rejected from WATER8. Because both ranks are below 3392 = 0.8*4240, this does not satisfy the route-level RR stop rule.",
         "The receipt-bound G4 submitter derives the exact node from the receipt and release pin, invokes only the standard benchmark launcher with one node and one GPU, and the write-once validator records a shared-orbital WATER4 canonical oracle plus actual 1e-9/1e-11 ranks before permitting sequential converged points. Each converged gate independently requires projector orthogonality error <=1e-10 and a finite nonnegative reconstructed full-space residual diagnostic. Accuracy-sequence completion and complete-iteration acceleration are independent gates; an accurate but slower pair cannot promote to WATER8.",
-        "Commit 30ddc82 fuses the two exact projected Wvvvv ladders with a symmetric bilinear identity, caps fused auxiliary subblocks so two live rank-square transforms remain within the prior one-transform allowance, and records the logical workspace; singleton tails retain the sequential path."
+        "Commit 30ddc82 fuses the two exact projected Wvvvv ladders with a symmetric bilinear identity, caps fused auxiliary subblocks so two live rank-square transforms remain within the prior one-transform allowance, and records the logical workspace; singleton tails retain the sequential path.",
+        "Commit 38e846f exercises the production G4 CLI state machine through spectrum, gate, authorize, and probe: the first accurate cutoff must run its next tighter point; two accurate but iteration-slower points cannot reach WATER8; rank 3391 may continue and rank 3392 closes the route."
       ],
       "local_verification": {
         "receipt_bound_g4_continuation": {
@@ -1187,6 +1211,16 @@
           "a100_performance_gate_completed": false,
           "performance_eligible": false,
           "speedup_claim_allowed": false
+        },
+        "g4_cli_state_machine_integration": {
+          "source_commit": "38e846fd33f11439e0bdd2d0f4884541814061f9",
+          "focused_tests_passed": 36,
+          "failed": 0,
+          "independent_review": "no-P0-P1-P2-P3",
+          "uses_production_cli_main": true,
+          "writes_only_under_pytest_tmp_path": true,
+          "mtu_jobs_submitted": 0,
+          "water8_submission_enabled": false
         }
       },
       "limitations": [
@@ -1214,7 +1248,7 @@
       "id": "G5",
       "name": "doubles-amplitude-thc-rr-ccsd",
       "evidence_state": "local_measured",
-      "state": "published-eq36-algebra-gate-passed-algorithms8-10-version-of-record-numbering-audited-exact-full-pair-total-identity-passed-production-disabled",
+      "state": "published-eq36-algebra-gate-passed-algorithms8-10-version-of-record-numbering-audited-exact-full-pair-and-compressed-amplitude-identities-passed-production-disabled",
       "decision": "advance-to-receipt-bound-water2-complete-equation-and-inexact-fit-gates-while-keeping-production-disabled",
       "method_class": "controlled-approximation",
       "acceptance_table": "A",
@@ -1251,9 +1285,10 @@
         "Legacy complete_equation_graph metadata is explicitly scoped to the current RR coarse residual graph and does not claim that paper Algorithms 1-10 are production-wired (85a3592).",
         "A from-zero Algorithms 1-10 audit assembler enforces the Algorithms 4+5 versus Algorithm 6 XOR, exactly one doubles back-projection, unprojected singles, shared transfer accounting, and caller-attested identity-token matching (5987560).",
         "Commit 7399a87 adds the raw Algorithm 7 contribution plus its physical pair transpose exactly once. Six exact full-pair FP64 cases, including nonzero T1 and both Algorithms 4+5 and Algorithm 6 paths, reproduce the independent RR/CD total doubles and singles residuals to roundoff.",
-        "The published Eq. 36 algebra gate and exact full-pair total identity pass. Every direct-paper complete, accepted, formal, production, and performance flag remains false because inexact-factor, molecular convergence/accuracy, and A100 performance gates have not passed.",
+        "The published Eq. 36 algebra gate and exact full-pair total identity pass. Every direct-paper complete, accepted, formal, production, and performance flag remains false because accepted-fit, molecular convergence/accuracy, and A100 performance gates have not passed.",
         "The complete WATER2 audit launcher is bound to one immutable release-B source, its sealed selected-GINT receipt, the receipt-pinned node, fixed provider/kernel choices, topology evidence, and write-once outputs. Its complete/formal/production/performance flags remain false.",
-        "Commit 1a9eeb3 validates final published Eq. 36 against Eq. 38 plus Algorithm 7 line 19 with one-dimensional, nontrivial pair-symmetric, independent scalar-loop, and full-pair tests; arbitrary nonsymmetric tensors remain equation-endpoint checks with overall equivalence out of scope."
+        "Commit 1a9eeb3 validates final published Eq. 36 against Eq. 38 plus Algorithm 7 line 19 with one-dimensional, nontrivial pair-symmetric, independent scalar-loop, and full-pair tests; arbitrary nonsymmetric tensors remain equation-endpoint checks with overall equivalence out of scope.",
+        "Commit bfe9fc8 adds a compressed amplitude-THC equation-identity gate with RR rank and THC rank below OV, dense non-one-hot CP factors, nonzero T1, both joint-6 and separate-4-plus-5 paths, and an independently reconstructed Eq. 11-14 RR/CD oracle. Maximum doubles and singles differences are 1.20e-15 and 1.11e-16. The CP fit intentionally fails its accuracy gate and the ERI side remains analytic full-pair/CD, so accepted, complete, production, and performance flags remain false."
       ],
       "local_verification": {
         "receipt_bound_complete_water2_audit_launcher": {
@@ -1558,6 +1593,36 @@
           "legacy_arxiv_v1_eq35_explicitly_unequal": true,
           "production_enabled": false,
           "performance_eligible": false
+        },
+        "compressed_amplitude_thc_equation_identity": {
+          "source_commit": "bfe9fc8a501ae38d9ed4ebc9de312cc919657fc6",
+          "evidence_state": "local_measured",
+          "case_count": 4,
+          "shapes": [
+            "nocc=3,nvir=3,rr=3,thc=4",
+            "nocc=2,nvir=4,rr=3,thc=3"
+          ],
+          "rr_rank_below_ov": true,
+          "thc_rank_below_ov": true,
+          "dense_non_one_hot_cp_factors": true,
+          "includes_nonzero_t1": true,
+          "omega_ac_paths": [
+            "joint-6",
+            "separate-4-plus-5"
+          ],
+          "independent_eq11_14_reconstruction": true,
+          "eri_side": "analytic full-pair/CD; inexact ERI-THC not tested",
+          "cp_fit_accuracy_gate_passed": false,
+          "max_abs_doubles_error": 1.2e-15,
+          "max_abs_singles_error": 1.11e-16,
+          "all_thc_tests_passed": 260,
+          "all_thc_tests_skipped_environment": 34,
+          "failed": 0,
+          "independent_review": "no-P0-P1-P2-P3-after-rectangular-coverage",
+          "complete": false,
+          "accepted": false,
+          "production_enabled": false,
+          "performance_eligible": false
         }
       },
       "limitations": [
@@ -1568,7 +1633,8 @@
         "Algorithms 8-10 retain unresolved delta_XY and transformed-F conventions; published Eq. 43 formal equivalence is limited to a symmetric amplitude core, while the nonsymmetric-core schedule is Appendix-literal audit only.",
         "No inexact THC production substitution is accepted until equation-level composition plus water2 and water4 residual/accuracy gates pass.",
         "Jobs 62650 and 62651 are non-fixed-node CUDA correctness audits and contain no formal accuracy or performance evidence.",
-        "The final published Eq. 36 algebra gate is local small-tensor evidence only. The complete assembler asserts the equation-version contract and optional gauge precondition but does not claim per-instance dense numerical equivalence; that remains the separate joint-audit oracle."
+        "The final published Eq. 36 algebra gate is local small-tensor evidence only. The complete assembler asserts the equation-version contract and optional gauge precondition but does not claim per-instance dense numerical equivalence; that remains the separate joint-audit oracle.",
+        "The compressed amplitude-THC identity is relative to the RR projector reconstructed from the deliberately inexact CP factors; it does not establish fidelity to the original pre-fit projector, an accepted fit tolerance, compressed ERI-THC, molecular convergence, or performance."
       ],
       "missing": [
         "A100 fused full-pair endpoint validation from the frozen A2 snapshot.",
@@ -1577,7 +1643,7 @@
         "Term-by-term inexact WATER2 and WATER4 equation comparisons, followed only for a passing WATER8 candidate by the eight-ghost-monomer counterpoise records.",
         "THC fit-inclusive qualified water8 timing and error.",
         "Receipt-bound WATER2 direct-CD complete-equation comparison using the published Eq. 36 contract.",
-        "Inexact amplitude/ERI THC fits followed by WATER2 and WATER4 convergence, projected/full residual, energy, and resource gates."
+        "Accepted amplitude and ERI THC fits followed by WATER2 and WATER4 convergence, projected/full residual, energy, and resource gates."
       ]
     },
     {
@@ -1612,7 +1678,7 @@
     "python_compile_passed": true,
     "git_diff_and_whitespace_passed": true,
     "candidate_mtu_validation_completed": false,
-    "known_evidence_gap": "Snapshot A 29a74a45... is immutable/runtime-closed and Job 63020 is queued on compute-1-0, but the job has not run. No selected-GINT receipt, release snapshot B, release-gate result, grouped A/B, or receipt-bound G4/G5 result exists.",
+    "known_evidence_gap": "Snapshot A 29a74a45... is immutable/runtime-closed and Job 63020 is queued on candidate nodes compute-1-[0,2-3], but it has not run. No selected-GINT receipt, release snapshot B, release-gate result, grouped A/B, or receipt-bound G3/G4/G5 molecular result exists.",
     "fused_r123_review": "no-P0-P1-P2",
     "grouped_gint_review": "no-P0-P1-P2",
     "a2_runtime_build_and_snapshot_validation": "passed",
@@ -1706,6 +1772,36 @@
       "independent_review": "no-P0-P1-P2-after-corrections",
       "production_enabled": false,
       "performance_eligible": false
+    },
+    "g3_receipt_bound_dag": {
+      "commits": [
+        "5dae27b",
+        "aec0d8b"
+      ],
+      "focused_passed": 15,
+      "related_passed": 67,
+      "failed": 0,
+      "independent_review": "P1/P2 corrected then no P0-P3",
+      "g3_complete_claim_eligible": false
+    },
+    "g4_cli_state_machine_integration": {
+      "commit": "38e846f",
+      "passed": 36,
+      "failed": 0,
+      "independent_review": "no-P0-P1-P2-P3"
+    },
+    "compressed_amplitude_thc_equation_identity": {
+      "commit": "bfe9fc8",
+      "cases": 4,
+      "all_thc_passed": 260,
+      "all_thc_skipped_environment": 34,
+      "failed": 0,
+      "max_abs_doubles_error": 1.2e-15,
+      "max_abs_singles_error": 1.11e-16,
+      "eri_thc_inexact_tested": false,
+      "production_enabled": false,
+      "performance_eligible": false,
+      "independent_review": "no-P0-P1-P2-P3-after-rectangular-coverage"
     }
   },
   "mtu_job_ledger": [
@@ -3340,7 +3436,7 @@
     ],
     "accuracy_qualified_candidate_count": 0,
     "g1_single_ab_observation_seconds": 869.2149962764233,
-    "reason": "The exact-node canonical denominator is complete. G1 remains one equation-preserving A/B observation and FNO stopped at WATER4. RR cutoffs 1e-7 and 1e-8 pass WATER2, but both converged WATER4 candidates fail the 1e-4 Eh energy gate and complete-iteration speed gate, so those cutoffs cannot enter WATER8. Their ranks 1495/1914 are below the 3392 route-stop boundary; the RR route remains incomplete pending actual 1e-9/1e-11 ranks and sequential converged gates. Job 62676 only selects GEMM/cuBLAS under the tie rule from one non-converged WATER4 cycle. No WATER8 candidate or eight-monomer counterpoise result exists. THC passes the final published Eq. 36 algebra gate and exact full-pair total-identity fixture, while inexact-factor, molecular, production, and performance gates remain false. The post-result fused Wvvvv kernel at 30ddc82 has passed only local exact/workspace tests and has no A100 speed evidence.",
+    "reason": "No accuracy-qualified WATER8 RR/THC candidate or repeated V1 timing exists. G3/G4/G5 local control and algebra gates do not establish A100 whole-stage performance.",
     "g1_single_ab_sample_count_per_arm": 1,
     "g1_repeat_qualified": false,
     "g1_formal_speedup_eligible": false,

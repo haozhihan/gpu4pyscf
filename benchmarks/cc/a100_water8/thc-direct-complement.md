@@ -308,8 +308,13 @@ has passed.
   `7.746556e-3` before the fix to `1.38778e-16`; the maximum singles error is
   `5.55112e-17`, and Algorithm 6 minus Algorithms 4+5 is at most
   `3.46945e-18`.
-- Commit `1a9eeb3` passes 76 focused CPU tests with seven GPU-environment skips;
-  the complete local THC family passes 256 tests with 34 GPU-environment skips.
+- Commit `1a9eeb3` passes 76 focused CPU tests with seven GPU-environment skips.
+  Commit `bfe9fc8` then adds four compressed amplitude-THC equation-identity
+  cases with `RR rank < OV`, `THC rank < OV`, dense non-one-hot CP factors,
+  nonzero T1, and both complete A/C paths.  Against an independently
+  reconstructed RR/CD oracle, the maximum doubles and singles differences are
+  `1.20e-15` and `1.11e-16`; the complete local THC family now passes 260 tests
+  with 34 GPU-environment skips.
   An independent re-review closed three documentation and gate-semantics issues
   and found no remaining P0--P2 defect. These counts establish local algebra
   behavior only; A100 validation of this commit is still missing.
@@ -324,8 +329,11 @@ has passed.
   back-projection, unprojected singles, shared transfer counter, and
   cross-artifact identity tokens. Its exact full-pair total-identity fixture
   passes. The equation-version contract is now resolved, but complete,
-  accepted, formal, production, and performance flags remain false because
-  inexact-factor and WATER2/WATER4 molecular gates have not passed.
+  accepted, formal, production, and performance flags remain false.  The new
+  compressed-amplitude identity is defined in the projector reconstructed from
+  that CP fit; the fit itself deliberately fails its accuracy gate, the ERI
+  side remains analytic full-pair/CD, and WATER2/WATER4 molecular gates have
+  not passed.
   Caller-attested identity tokens neither prove the numerical arrays' origin
   nor make those arrays immutable, and the assembler reports both limitations.
 - Weighted ERI-THC CP/ALS, an exact-pair endpoint, and factorized MP2

@@ -614,6 +614,29 @@ first passing cutoff plus its next tighter point is complete, or until accuracy
 still fails at rank at least 3392. Exact Wvvvv kernel fusion cannot retroactively
 qualify the rejected 1e-7/1e-8 energies.
 
+### Receipt-bound G3 tight-CD grid
+
+`tight_cd_g3.py` builds the WATER2/WATER4 `eri_tol={1e-4,1e-6,1e-8}`
+experiment as an immutable plan, previews or submits its Slurm DAG, records the
+actual job IDs, and audits the synchronized timing and counterpoise outputs.
+The A/B comparison uses byte-identical serialized RHF orbitals and one fixed RR
+cutoff. `rr_canonical` and `rr_cd` deliberately build independent projectors,
+so this measures the CD increment in the complete RR pipeline and belongs in
+the A table. It is not a shared-projector test or a proof of full-space
+canonical/CD equivalence.
+
+Every result is bound to its planned source, output path, Slurm job, receipt
+node, `eri_tol`, and RR cutoff. The selection rule chooses the loosest point
+that passes correlation-energy, projected-residual, complete counterpoise,
+resource, checkpoint, and evidence-integrity gates; a tighter passing point is
+preferred when its complete RR-CD post-HF time is no more than 3% slower than
+that loose anchor. WATER4 analysis always reports `ready_for_water8=false`.
+Creating a WATER8 plan additionally requires a same-source, same-receipt,
+same-`eri_tol` G4 gate with `advance_to_water8=true`.
+
+Commits `5dae27b` and `aec0d8b` provide this control plane and its fail-closed
+tests. They submit no MTU jobs and do not mark G3 complete.
+
 ### Receipt-bound G4 WATER4 continuation
 
 The selected-GINT receipt does not authorize an arbitrary Slurm wrapper. It
@@ -1015,3 +1038,13 @@ ranks 512 through 1024, and ERI candidates `512:1e-4`, `768:1e-5`, and
 `1024:1e-6`. Every acceptance, production, formal-validation, and performance
 flag remains false. These artifacts do not establish an iterative THC-CCSD
 energy or performance result.
+
+Commit `bfe9fc8` also checks the complete equation with compressed
+amplitude-THC factors: RR and THC ranks are below `OV`, the CP factors are dense
+and non-one-hot, T1 is nonzero, and both A/C schedules agree with an independent
+RR/CD oracle defined from the Eq. 11--14 reconstructed projector. Across four
+cases, maximum doubles and singles errors are `1.20e-15` and `1.11e-16`; all
+THC tests total 260 passed with 34 GPU-environment skips. The fit is
+deliberately outside its accuracy tolerance and the ERI side remains analytic
+full-pair/CD, so this is an algebra identity gate only. It does not authorize
+an inexact molecular calculation or production execution.
