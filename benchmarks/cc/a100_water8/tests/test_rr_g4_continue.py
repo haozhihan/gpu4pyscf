@@ -253,6 +253,7 @@ def _write_receipt_and_pin(
         "schema": release_gate.ACCEPTANCE_SCHEMA,
         "created_utc": "2026-09-15T00:00:00+00:00",
         "status": "accepted", "performance_eligible": True,
+        "trust_boundary": release_gate.TRUST_BOUNDARY,
         "source": {
             "root": str(source.resolve()), "tree_sha256": "a" * 64,
             "manifest": {

@@ -951,6 +951,15 @@ allocation can set `performance_eligible=true`. G3 plans and G4
 authorization/submission additionally require the sealed acceptance and reject
 missing, pending, failed, moved, or digest-mismatched evidence.
 
+This acceptance is an integrity and workflow-authorization artifact under the
+existing `task-root-owner-and-root-are-trusted-cooperators` boundary. Its
+sidecar is a content digest, not a Slurm-controller signature: it detects
+post-acceptance mutation and accidental evidence substitution, but it cannot
+authenticate evidence deliberately fabricated by an operator who controls both
+Slurm submissions and every task-local artifact. Adversarial operator
+provenance would require a scheduler-signed record or a separately controlled
+evidence store.
+
 `gpu4pyscf.cc.gint_pair_columns.GINTAOPairColumnProvider` remains the slower
 restricted-task reference adapter for diagnostic comparison.
 

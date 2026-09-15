@@ -824,13 +824,50 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not values or values[0].startswith("-"):
         values.insert(0, "issue")
     args = _parser().parse_args(values)
-    if os.path.lexists(args.release_pin):
-        raise FileExistsError(f"refusing to overwrite release pin {args.release_pin}")
     if args.command == "resume-pin":
         pin = build_release_pin(args.receipt)
-        pin_created = write_once_release_pin(args.release_pin, pin)
+        try:
+            pin_created = write_once_release_pin(args.release_pin, pin)
+        except FileExistsError:
+            # Publication may have committed before a directory-fsync error.
+            # Accept only the exact read-only inode; never rewrite it.
+            pin_path, pin_bytes, pin_stat = _regular_file(
+                args.release_pin, name="existing release pin"
+            )
+            expected = (
+                json.dumps(
+                    dict(pin), indent=2, sort_keys=True, ensure_ascii=True,
+                    allow_nan=False,
+                ) + "\n"
+            ).encode("utf-8")
+            if pin_bytes != expected:
+                raise FileExistsError(
+                    f"existing release pin differs from receipt: {pin_path}"
+                )
+            if pin_stat.st_mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH):
+                raise ValueError("existing release pin must be read-only")
+            descriptor = os.open(
+                pin_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            )
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            directory_fd = os.open(pin_path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+            pin_created = {
+                "release_pin": str(pin_path),
+                "release_pin_sha256": _sha256_bytes(expected),
+                "embed_at": RELEASE_PIN_RELATIVE_PATH.as_posix(),
+                "recovered_existing": True,
+            }
         print(json.dumps(pin_created, sort_keys=True))
         return 0
+    if os.path.lexists(args.release_pin):
+        raise FileExistsError(f"refusing to overwrite release pin {args.release_pin}")
     payload = build_receipt_payload(args.result, args.slurm_output)
     created = write_once_receipt(args.receipt, payload)
     pin = build_release_pin(args.receipt)

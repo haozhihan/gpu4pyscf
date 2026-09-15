@@ -3358,6 +3358,39 @@ def test_resume_pin_recovers_after_atomic_publication_failure(
     assert stat.S_IMODE(output.stat().st_mode) == 0o444
 
 
+def test_resume_pin_recovers_ambiguous_post_link_fsync_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence = _materialize_qualification(tmp_path)
+    receipt = evidence["receipt"]
+    output_dir = tmp_path / "task/results/recovered-linked-pin"
+    output_dir.mkdir()
+    output = output_dir / RECEIPT.RELEASE_PIN_RELATIVE_PATH.name
+    expected = RECEIPT.build_release_pin(receipt)
+    real_fsync = RECEIPT.os.fsync
+    calls = 0
+
+    def fail_directory_fsync(descriptor: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected post-link directory fsync failure")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(RECEIPT.os, "fsync", fail_directory_fsync)
+    with pytest.raises(OSError, match="post-link"):
+        RECEIPT.write_once_release_pin(output, expected)
+    assert output.is_file()
+    assert json.loads(output.read_text()) == expected
+
+    monkeypatch.setattr(RECEIPT.os, "fsync", real_fsync)
+    assert RECEIPT.main([
+        "resume-pin", "--receipt", str(receipt), "--release-pin", str(output),
+    ]) == 0
+    assert json.loads(output.read_text()) == expected
+    assert stat.S_IMODE(output.stat().st_mode) == 0o444
+
+
 def test_resume_pin_rehashes_qualification_source(tmp_path: Path) -> None:
     evidence = _materialize_qualification(tmp_path)
     changed = (
@@ -3375,6 +3408,24 @@ def test_resume_pin_rehashes_qualification_source(tmp_path: Path) -> None:
             "--release-pin", str(output),
         ])
     assert not output.exists()
+
+
+def test_resume_pin_never_rewrites_mismatched_existing_staging(
+    tmp_path: Path,
+) -> None:
+    evidence = _materialize_qualification(tmp_path)
+    output_dir = tmp_path / "task/results/rejected-existing-pin"
+    output_dir.mkdir()
+    output = output_dir / RECEIPT.RELEASE_PIN_RELATIVE_PATH.name
+    original = b'{"forged":true}\n'
+    output.write_bytes(original)
+    output.chmod(0o444)
+    with pytest.raises(FileExistsError, match="differs from receipt"):
+        RECEIPT.main([
+            "resume-pin", "--receipt", str(evidence["receipt"]),
+            "--release-pin", str(output),
+        ])
+    assert output.read_bytes() == original
 
 
 def test_resume_pin_rejects_changed_receipt_sidecar(

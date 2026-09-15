@@ -7,6 +7,10 @@ itself.  This module creates a reviewable submission plan, submits that exact
 plan on the node pinned by the qualification receipt, and only then issues a
 write-once acceptance after validating the release result, topology, Slurm
 output, and terminal ``sacct`` row.
+
+This is an integrity and workflow-authorization chain inside the project's
+existing trust boundary: the task-root owner and root are trusted operators.
+The sidecars are content bindings, not signatures from the Slurm controller.
 """
 
 from __future__ import annotations
@@ -35,6 +39,7 @@ ALLOWED_MTU_A100_NODES = frozenset({
     "compute-1-6",
 })
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+TRUST_BOUNDARY = "task-root-owner-and-root-are-trusted-cooperators"
 
 
 class ContractError(RuntimeError):
@@ -516,6 +521,7 @@ def build_acceptance(
         "created_utc": _utc_now(),
         "status": "accepted",
         "performance_eligible": True,
+        "trust_boundary": TRUST_BOUNDARY,
         "source": {
             "root": contract["source_root"],
             "tree_sha256": contract["source_tree_sha256"],
@@ -546,6 +552,7 @@ def write_once_acceptance(path: Path, payload: Mapping[str, Any]) -> dict[str, A
         payload.get("schema") == ACCEPTANCE_SCHEMA,
         payload.get("status") == "accepted",
         payload.get("performance_eligible") is True,
+        payload.get("trust_boundary") == TRUST_BOUNDARY,
     )):
         raise ContractError("only an accepted release gate can be sealed")
     target = path.expanduser().resolve(strict=False)
@@ -640,9 +647,10 @@ def validate_release_acceptance(
         if isinstance(accepted_source, dict) else None
     )
     if not all((
-        payload.get("schema") == ACCEPTANCE_SCHEMA,
-        payload.get("status") == "accepted",
-        payload.get("performance_eligible") is True,
+            payload.get("schema") == ACCEPTANCE_SCHEMA,
+            payload.get("status") == "accepted",
+            payload.get("performance_eligible") is True,
+            payload.get("trust_boundary") == TRUST_BOUNDARY,
         accepted_source == {
             "root": str(source),
             "tree_sha256": source_digest,
