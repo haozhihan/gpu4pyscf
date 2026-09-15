@@ -4,6 +4,8 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -263,3 +265,384 @@ def test_driver_never_runs_benchmark_or_names_water8_case() -> None:
     assert "subprocess.run" in source  # sacct only
     assert "def _benchmark_base" not in source
     assert '"--case"' not in source
+
+
+def _write_read_only_json(path: Path, payload: dict[str, Any]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o444)
+    return path
+
+
+class _SyntheticG4Chain:
+    """Build a release-bound WATER4 evidence chain for CLI integration tests."""
+
+    def __init__(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *,
+        rank_1e9: int = 2500, rank_1e11: int = 2800,
+    ) -> None:
+        self.node = "compute-1-3"
+        self.source, self.receipt = _write_receipt_and_pin(tmp_path, self.node)
+        self.task = self.source.parents[2]
+        self.results = self.task / "results"
+        self.chain_dir = self.results / "rr-g4-water4/synthetic"
+        self.chain_dir.mkdir(parents=True)
+        self.source_digest = self.source.parent.name
+        self.orbital_sha = "b" * 64
+        self.orbital_fingerprint = "c" * 64
+        self.orbital_path = str(self.results / "orbitals/water4.npz")
+        self.jobs: dict[str, tuple[str, bool]] = {}
+        self.sacct_calls: list[list[str]] = []
+
+        receipt_envelope = json.loads(self.receipt.read_text(encoding="utf-8"))
+        self.receipt_sha = hashlib.sha256(self.receipt.read_bytes()).hexdigest()
+        self.payload_sha = receipt_envelope["payload_sha256"]
+        self.pin = self.source / "gpu4pyscf/cc/gint_release_pin.json"
+        # These are immutable inputs to every continuation command in this fixture.
+        self.receipt.chmod(0o444)
+        Path(str(self.receipt) + ".sha256").chmod(0o444)
+        self.pin.chmod(0o444)
+
+        def fake_sacct(
+            command: list[str], *, check: bool, capture_output: bool, text: bool,
+        ) -> SimpleNamespace:
+            assert command[0] == "/usr/bin/sacct"
+            assert check and capture_output and text
+            job_id = command[command.index("--jobs") + 1]
+            job_name, probe = self.jobs[job_id]
+            state, exit_code = ("FAILED", "1:0") if probe else ("COMPLETED", "0:0")
+            row = "|".join((
+                job_id, job_name, "mrigpu", self.node, state, exit_code,
+                "2026-09-15T00:00:00", "2026-09-15T00:00:01",
+                "2026-09-15T00:01:00", "00:00:59",
+            ))
+            self.sacct_calls.append(command)
+            return SimpleNamespace(stdout=row + "\n")
+
+        monkeypatch.setattr(rr_g4.subprocess, "run", fake_sacct)
+        self.oracle = self.record(
+            "oracle", method="canonical", job_id="71000", e_corr=-1.0,
+            iteration_seconds=10.0,
+        )
+        self.probe_1e9 = self.record(
+            "probe-1e9", method=rr_g4.METHOD, job_id="71001", probe=True,
+            cutoff=1e-9, rank=rank_1e9,
+        )
+        self.probe_1e11 = self.record(
+            "probe-1e11", method=rr_g4.METHOD, job_id="71002", probe=True,
+            cutoff=1e-11, rank=rank_1e11,
+        )
+        self.spectrum = self.chain_dir / "spectrum.json"
+
+    def _source(self) -> dict[str, Any]:
+        return {
+            "tree_sha256": self.source_digest,
+            "tree_sha256_at_start": self.source_digest,
+            "tree_sha256_at_end": self.source_digest,
+            "stable_during_run": True,
+            "repository": str(self.source),
+            "snapshot": {
+                "snapshot_root": str(self.source.parent),
+                "valid_at_start": True,
+                "valid_at_end": True,
+                "read_only_at_start": True,
+                "read_only_at_end": True,
+                "runtime_binaries_valid_at_start": True,
+                "runtime_binaries_valid_at_end": True,
+                "stable_during_run": True,
+            },
+        }
+
+    def _provider_gate(self, job_id: str) -> dict[str, Any]:
+        return {
+            "validated": True,
+            "execution_mode": "consumer-benchmark",
+            "receipt": {
+                "path": str(self.receipt),
+                "sha256": self.receipt_sha,
+                "payload_sha256": self.payload_sha,
+                "release_source_sha256": self.source_digest,
+                "current_runtime": {
+                    "environment": {"SLURM_JOB_ID": job_id},
+                },
+            },
+        }
+
+    def record(
+        self, label: str, *, method: str, job_id: str,
+        cutoff: float | None = None, rank: int | None = None,
+        probe: bool = False, e_corr: float = -1.0,
+        iteration_seconds: float = 8.0,
+    ) -> Path:
+        job_name = f"g4-{label}"
+        self.jobs[job_id] = (job_name, probe)
+        record: dict[str, Any] = {
+            "case_id": rr_g4.CASE_ID,
+            "method": method,
+            "status": "not_converged" if probe else "completed",
+            "cc_converged": False if probe else True,
+            "cc_iterations": 1 if probe else 5,
+            "e_corr": e_corr,
+            "post_hf_seconds": iteration_seconds + 5.0,
+            "source": self._source(),
+            "canonical_orbitals": {
+                "artifact_sha256": self.orbital_sha,
+                "orbital_fingerprint": self.orbital_fingerprint,
+                "artifact_path": self.orbital_path,
+            },
+            "slurm": {
+                "SLURM_JOB_ID": job_id,
+                "SLURM_JOB_NAME": job_name,
+                "SLURM_JOB_NODELIST": self.node,
+                "SLURM_JOB_PARTITION": "mrigpu",
+                "SLURM_CPUS_PER_TASK": "64",
+            },
+            "experiment_record": {"phases": [{
+                "name": "ccsd_iterations", "depth": 0,
+                "elapsed_s": iteration_seconds,
+            }]},
+        }
+        if method == rr_g4.METHOD:
+            assert cutoff is not None and rank is not None
+            record.update({
+                "approximation": {"rr_eig_cutoff": cutoff},
+                "ranks": {
+                    "rr_rank": rank,
+                    "rr_full_dimension": rr_g4.PAIR_DIMENSION,
+                },
+                "provider_runtime_gate": self._provider_gate(job_id),
+                "method_metadata": {"rr_projector_build": {
+                    "cutoff_bracketed": True,
+                    "capped": False,
+                    "solver": "synthetic-lanczos",
+                    "requested_subspace": rank,
+                    "max_ritz_residual": 1e-12,
+                    "projector": {"orthogonality_error": 1e-12},
+                }},
+            })
+            if not probe:
+                record.update({
+                    "residual": {"projected_equation": 1e-7},
+                    "full_space_residual_diagnostic": {
+                        "available": True,
+                        "execution_status": "completed",
+                        "residual_norm": 2.5e-3,
+                    },
+                    "hbm": {"peak_process_MiB": 70 * 1024},
+                    "peak_host_RSS_GiB": 100.0,
+                    "checkpoint": {"included_in_post_hf": True},
+                })
+        path = _write_read_only_json(
+            self.results / "records" / f"{label}.json", record,
+        )
+        topology = {
+            "performance_eligible": True,
+            "mode": "physical8",
+            "slurm": {
+                "SLURM_JOB_ID": job_id,
+                "SLURM_JOB_NODELIST": self.node,
+            },
+            "command": [
+                str(self.source / "benchmarks/cc/a100_water8/benchmark.py"),
+                "--case", rr_g4.CASE_ID,
+            ],
+        }
+        _write_read_only_json(
+            self.results / "topology" / f"physical8-benchmark-{job_id}.json",
+            topology,
+        )
+        return path
+
+    def make_spectrum(self) -> dict[str, Any]:
+        assert rr_g4.main([
+            "spectrum",
+            "--task-root", str(self.task),
+            "--source-root", str(self.source),
+            "--gint-runtime-gate-receipt", str(self.receipt),
+            "--output", str(self.spectrum),
+            "--oracle-record", str(self.oracle),
+            "--probe-record", str(self.probe_1e9),
+            "--probe-record", str(self.probe_1e11),
+        ]) == 0
+        return json.loads(self.spectrum.read_text(encoding="utf-8"))
+
+    def gate(
+        self, *, label: str, cutoff: float, record: Path,
+        previous: Path | None = None, probe_summary: Path | None = None,
+    ) -> tuple[Path, dict[str, Any]]:
+        output = self.chain_dir / f"{label}-gate.json"
+        argv = [
+            "gate",
+            "--task-root", str(self.task),
+            "--source-root", str(self.source),
+            "--gint-runtime-gate-receipt", str(self.receipt),
+            "--output", str(output),
+            "--rr-eig-cutoff", str(cutoff),
+            "--spectrum-summary", str(self.spectrum),
+            "--rr-record", str(record),
+        ]
+        if previous is not None:
+            argv += ["--previous-gate", str(previous)]
+        if probe_summary is not None:
+            argv += ["--probe-summary", str(probe_summary)]
+        assert rr_g4.main(argv) == 0
+        return output, json.loads(output.read_text(encoding="utf-8"))
+
+    def authorize(
+        self, *, stage: str, cutoff: float, previous: Path | None = None,
+        probe_summary: Path | None = None,
+    ) -> int:
+        argv = [
+            "authorize",
+            "--task-root", str(self.task),
+            "--source-root", str(self.source),
+            "--gint-runtime-gate-receipt", str(self.receipt),
+            "--stage", stage,
+            "--rr-eig-cutoff", str(cutoff),
+            "--spectrum-summary", str(self.spectrum),
+        ]
+        if previous is not None:
+            argv += ["--previous-gate", str(previous)]
+        if probe_summary is not None:
+            argv += ["--probe-summary", str(probe_summary)]
+        return rr_g4.main(argv)
+
+    def custom_probe(
+        self, *, label: str, cutoff: float, rank: int, previous: Path,
+    ) -> tuple[Path, dict[str, Any]]:
+        record = self.record(
+            f"{label}-record", method=rr_g4.METHOD, job_id="71020",
+            probe=True, cutoff=cutoff, rank=rank,
+        )
+        output = self.chain_dir / f"{label}.json"
+        assert rr_g4.main([
+            "probe",
+            "--task-root", str(self.task),
+            "--source-root", str(self.source),
+            "--gint-runtime-gate-receipt", str(self.receipt),
+            "--output", str(output),
+            "--rr-eig-cutoff", str(cutoff),
+            "--spectrum-summary", str(self.spectrum),
+            "--previous-gate", str(previous),
+            "--rr-record", str(record),
+        ]) == 0
+        return output, json.loads(output.read_text(encoding="utf-8"))
+
+
+def test_cli_first_pass_requires_next_tighter_and_slow_sequence_stops(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chain = _SyntheticG4Chain(tmp_path, monkeypatch)
+    spectrum = chain.make_spectrum()
+    assert [item["cutoff"] for item in spectrum["probes"]] == pytest.approx(
+        [1e-9, 1e-11]
+    )
+    assert spectrum["oracle"]["complete_iteration_timing"]["seconds"] == 10.0
+    first_record = chain.record(
+        "converged-1e9", method=rr_g4.METHOD, job_id="71003",
+        cutoff=1e-9, rank=2500, e_corr=-1.0, iteration_seconds=12.0,
+    )
+    first_path, first = chain.gate(
+        label="first", cutoff=1e-9, record=first_record,
+    )
+    assert first["scientific_pass"] is True
+    assert first["sequence_complete"] is False
+    assert first["requires_tighter"] is True
+    assert first["next_cutoff"] == pytest.approx(1e-11)
+    assert first["advance_to_water8"] is False
+
+    assert chain.authorize(
+        stage="converge", cutoff=1e-11, previous=first_path,
+    ) == 0
+    second_record = chain.record(
+        "converged-1e11", method=rr_g4.METHOD, job_id="71004",
+        cutoff=1e-11, rank=2800, e_corr=-1.0, iteration_seconds=11.0,
+    )
+    _, second = chain.gate(
+        label="second", cutoff=1e-11, record=second_record,
+        previous=first_path,
+    )
+    assert second["scientific_pass"] is True
+    assert second["sequence_complete"] is True
+    assert second["requires_tighter"] is False
+    assert second["promotable_cutoffs"] == []
+    assert second["advance_to_water8"] is False
+    assert second["performance_stop"] is True
+    assert len(chain.sacct_calls) == 5
+    for immutable in (chain.receipt, chain.pin, chain.spectrum, first_path):
+        assert immutable.stat().st_mode & 0o222 == 0
+
+
+def test_cli_failed_rank_below_boundary_authorizes_custom_probe_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chain = _SyntheticG4Chain(
+        tmp_path, monkeypatch, rank_1e9=3391, rank_1e11=3300,
+    )
+    chain.make_spectrum()
+    failed_1e9 = chain.record(
+        "failed-accuracy-1e9", method=rr_g4.METHOD, job_id="71005",
+        cutoff=1e-9, rank=3391, e_corr=-0.9998,
+    )
+    gate_1e9_path, gate_1e9 = chain.gate(
+        label="failed-1e9", cutoff=1e-9, record=failed_1e9,
+    )
+    assert gate_1e9["scientific_pass"] is False
+    assert gate_1e9["rank"] == rr_g4.RANK_STOP_BOUNDARY - 1
+    assert gate_1e9["route_stop"] is False
+    assert gate_1e9["requires_tighter"] is True
+    assert chain.authorize(
+        stage="converge", cutoff=1e-11, previous=gate_1e9_path,
+    ) == 0
+
+    failed_1e11 = chain.record(
+        "failed-accuracy-1e11", method=rr_g4.METHOD, job_id="71006",
+        cutoff=1e-11, rank=3300, e_corr=-0.9998,
+    )
+    gate_1e11_path, gate_1e11 = chain.gate(
+        label="failed-1e11", cutoff=1e-11, record=failed_1e11,
+        previous=gate_1e9_path,
+    )
+    assert gate_1e11["route_stop"] is False
+    assert gate_1e11["next_cutoff"] == pytest.approx(1e-13)
+    assert chain.authorize(
+        stage="probe", cutoff=1e-13, previous=gate_1e11_path,
+    ) == 0
+    custom_path, custom = chain.custom_probe(
+        label="probe-1e13", cutoff=1e-13, rank=3350,
+        previous=gate_1e11_path,
+    )
+    assert custom["rank"] == 3350
+    assert custom["performance_eligible"] is False
+    assert chain.authorize(
+        stage="converge", cutoff=1e-13, previous=gate_1e11_path,
+        probe_summary=custom_path,
+    ) == 0
+
+
+def test_cli_failed_rank_at_boundary_closes_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chain = _SyntheticG4Chain(
+        tmp_path, monkeypatch, rank_1e9=rr_g4.RANK_STOP_BOUNDARY,
+    )
+    chain.make_spectrum()
+    failed_record = chain.record(
+        "failed-at-boundary", method=rr_g4.METHOD, job_id="71007",
+        cutoff=1e-9, rank=rr_g4.RANK_STOP_BOUNDARY, e_corr=-0.9998,
+    )
+    gate_path, gate = chain.gate(
+        label="boundary", cutoff=1e-9, record=failed_record,
+    )
+    assert gate["scientific_pass"] is False
+    assert gate["route_stop"] is True
+    assert gate["requires_tighter"] is False
+    assert gate["sequence_complete"] is False
+    assert gate["advance_to_water8"] is False
+    with pytest.raises(rr_g4.ContractError, match="closes the continuation chain"):
+        chain.authorize(
+            stage="converge", cutoff=1e-11, previous=gate_path,
+        )
