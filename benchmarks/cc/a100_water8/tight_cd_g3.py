@@ -851,10 +851,16 @@ def _bind_records(
         job = jobs[str(name)]
         if _record_path(record) != job["expected_outputs"][0]:
             reasons.append("result path differs from the immutable G3 plan")
+        if not isinstance(slurm, dict) or slurm.get("SLURM_JOB_NODELIST") != plan["node"]:
+            reasons.append("result node differs from the receipt-bound G3 node")
         if record.get("method") != job["method"]:
             reasons.append("result method differs from its G3 logical job")
         if record.get("case_id", _at(record, "case.id")) != plan["case_id"]:
             reasons.append("result case differs from the G3 plan")
+        if not _same_float(_record_eri_tol(record), job["eri_tol"]):
+            reasons.append("result eri_tol differs from its immutable G3 logical job")
+        if not _same_float(_record_rr_cutoff(record), RR_EIG_CUTOFF):
+            reasons.append("result RR cutoff differs from its immutable G3 logical job")
         orchestration = record.get("orchestration")
         if record.get("schema") == "gpu4pyscf.water8.counterpoise.v1":
             if not isinstance(orchestration, dict) or any((

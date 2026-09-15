@@ -456,6 +456,68 @@ def test_projector_metadata_and_gint_consumer_binding_are_hard_gates(
     assert any("pinned GINT receipt" in reason for reason in row["reasons"])
 
 
+def test_records_cannot_permute_tolerances_between_planned_jobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_formal_evidence(monkeypatch)
+    task, source, gint_receipt, _ = _task_source_receipt(tmp_path)
+    plan = G3.make_water2_plan(
+        task_root=task, source_root=source,
+        gint_runtime_gate_receipt=gint_receipt, run_id="tol-permutation",
+    )
+    submission, logical = _executed_receipt(tmp_path, plan)
+    records = _record_set(plan, logical)
+    first = next(
+        item for item in records
+        if item.get("schema") != "gpu4pyscf.water8.counterpoise.v1"
+        and item.get("method") == "rr_cd"
+        and item["plan"]["settings"]["eri_tol"] == 1e-4
+    )
+    second = next(
+        item for item in records
+        if item.get("schema") != "gpu4pyscf.water8.counterpoise.v1"
+        and item.get("method") == "rr_cd"
+        and item["plan"]["settings"]["eri_tol"] == 1e-6
+    )
+    first["plan"]["settings"]["eri_tol"], second["plan"]["settings"]["eri_tol"] = (
+        second["plan"]["settings"]["eri_tol"],
+        first["plan"]["settings"]["eri_tol"],
+    )
+    analysis = G3.analyze_stage(records, submission)
+    assert analysis["grid_complete"] is False
+    assert analysis["selection"]["ready_for_water4"] is False
+    assert any(
+        "eri_tol differs from its immutable G3 logical job" in reason
+        for reason in analysis["selection"]["reasons"]
+    )
+
+
+def test_cp_node_and_rr_cutoff_are_bound_to_each_logical_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_formal_evidence(monkeypatch)
+    task, source, gint_receipt, _ = _task_source_receipt(tmp_path)
+    plan = G3.make_water2_plan(
+        task_root=task, source_root=source,
+        gint_runtime_gate_receipt=gint_receipt, run_id="cp-node",
+    )
+    submission, logical = _executed_receipt(tmp_path, plan)
+    records = _record_set(plan, logical)
+    cp_record = next(
+        item for item in records
+        if item.get("schema") == "gpu4pyscf.water8.counterpoise.v1"
+        and item.get("method") == "rr_cd"
+    )
+    cp_record["slurm"]["SLURM_JOB_NODELIST"] = "compute-1-0"
+    cp_record["protocol"]["options"]["rr_eig_cutoff"] = 1e-9
+    analysis = G3.analyze_stage(records, submission)
+    assert analysis["grid_complete"] is False
+    assert analysis["selection"]["ready_for_water4"] is False
+    reasons = analysis["selection"]["reasons"]
+    assert any("node differs from the receipt-bound G3 node" in reason for reason in reasons)
+    assert any("RR cutoff differs from its immutable G3 logical job" in reason for reason in reasons)
+
+
 def test_g4_authorization_must_match_selected_eri_tol_and_receipt(tmp_path: Path) -> None:
     task, source, gint_receipt, contract = _task_source_receipt(tmp_path)
     result = {
