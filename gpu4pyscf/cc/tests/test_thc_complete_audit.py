@@ -210,6 +210,31 @@ def test_algorithms_4_plus_5_and_algorithm_6_are_strict_xor(monkeypatch):
         for entry in result.ledger.entries:
             assert entry.coefficient == 1.0
             assert entry.individual_backprojection_count == 0
+        published_8_10 = {
+            entry.algorithm: entry.equations
+            for entry in result.ledger.entries
+            if entry.algorithm in (8, 9, 10)
+        }
+        assert published_8_10 == {
+            8: (39, 40, 41),
+            9: (42,),
+            10: (43,),
+        }
+        ledger_metadata = result.ledger.as_dict()
+        assert ledger_metadata["equation_numbering_authority"] == (
+            "J. Chem. Phys. 156, 054102 (2022), "
+            "DOI:10.1063/5.0077770"
+        )
+        assert ledger_metadata["entry_equations_semantics"] == (
+            "published equations whose tensors are directly emitted by each "
+            "endpoint; dependencies consumed from earlier algorithms are not "
+            "repeated"
+        )
+        assert ledger_metadata["legacy_arxiv_v1_direct_equation_numbers"] == {
+            "algorithm8": [38, 39, 40],
+            "algorithm9": [41],
+            "algorithm10": [42],
+        }
         algorithm7_entry = next(
             entry for entry in result.ledger.entries if entry.algorithm == 7
         )

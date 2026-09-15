@@ -658,6 +658,20 @@ class THCCompleteAuditLedger:
     def as_dict(self) -> dict[str, Any]:
         return {
             "entries": [entry.as_dict() for entry in self.entries],
+            "equation_numbering_authority": (
+                "J. Chem. Phys. 156, 054102 (2022), "
+                "DOI:10.1063/5.0077770"
+            ),
+            "entry_equations_semantics": (
+                "published equations whose tensors are directly emitted by "
+                "each endpoint; dependencies consumed from earlier "
+                "algorithms are not repeated"
+            ),
+            "legacy_arxiv_v1_direct_equation_numbers": {
+                "algorithm8": [38, 39, 40],
+                "algorithm9": [41],
+                "algorithm10": [42],
+            },
             "omega_ac_xor_group": "algorithms-4-plus-5-xor-algorithm-6",
             "omega_ac_selection": self.omega_ac_selection,
             "rr_backprojection_count": int(self.rr_backprojection_count),
@@ -855,9 +869,9 @@ def _ledger(omega_ac_path: str) -> THCCompleteAuditLedger:
         (5, "thc_omega_c_algorithm5", (33,), "doubles", separate, "separate-4-plus-5"),
         (6, "thc_omega_ac_algorithm6", (34,), "doubles", not separate, "joint-6"),
         (7, "thc_omega_d_algorithm7", (36, 37, 38), "doubles", True, None),
-        (8, "thc_omega_gh_algorithm8", (38, 39, 40), "singles", True, None),
-        (9, "thc_omega_e_algorithm9", (41,), "doubles", True, None),
-        (10, "thc_omega_ij_algorithm10", (42,), "singles", True, None),
+        (8, "thc_omega_gh_algorithm8", (39, 40, 41), "singles", True, None),
+        (9, "thc_omega_e_algorithm9", (42,), "doubles", True, None),
+        (10, "thc_omega_ij_algorithm10", (43,), "singles", True, None),
     )
     entries = []
     for (
