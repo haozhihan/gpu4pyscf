@@ -973,3 +973,45 @@ when the requested GPU is on NUMA node 3.  Current launchers therefore reserve
 CPUs `24-31`.  Matched baseline and candidate timings must use the same
 reservation and guarded affinity.  A job rejected by this guard is recorded as
 a pre-compute topology rejection; it contains no HF or CCSD timing.
+
+## Receipt-bound complete THC WATER2 audit
+
+`run_mtu_thc_complete_water2_audit.sbatch` is the formal, audit-only launcher
+for the current WATER2 exact-full-pair anchor and staged inexact THC scan. It
+runs only from an immutable candidate release-B source whose manifest, fixed
+GINT release pin, sealed external receipt, source-tree digest, and runtime
+bundle all agree. The selected GINT provider and reference column/ring kernels
+are explicit in both the command and the write-once binding/return records.
+
+The launcher deliberately has no fixed `#SBATCH --nodelist`. Read the exact
+qualification node from B's release pin and pass it to Slurm; the launcher and
+runtime gate reject a different allocation. The approved MTU nodes are
+`compute-1-0`, `compute-1-2`, `compute-1-3`, `compute-1-5`, and
+`compute-1-6`, but a consumer must use the one named by its own receipt:
+
+```bash
+TASK=/mnt/mridata/vxu/thu-likun/hanhaozhi/agent-ccsd-a100-thc-rr-20260913
+SOURCE="${TASK}/snapshots/RELEASE_B_SHA256/source"
+RECEIPT="${TASK}/results/gint-runtime-gate-receipt/receipt.json"
+PYTHON=/mnt/mridata/vxu/thu-likun/hanhaozhi/agent-ccsd-baseline-20260913/.venv/bin/python
+NODE="$(${PYTHON} - "${SOURCE}/gpu4pyscf/cc/gint_release_pin.json" <<'PY'
+import json
+import pathlib
+import sys
+pin = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(pin["release_runtime_contract"]["node"])
+PY
+)"
+sbatch --nodelist="${NODE}" \
+  --export="ALL,CCSD_TASK_ROOT=${TASK},CCSD_SOURCE_ROOT=${SOURCE},CCSD_EXPECTED_DEPLOYMENT_PROFILE=candidate,CCSD_REQUIRE_CANONICAL_PRISTINE=0,GINT_RUNTIME_GATE_RECEIPT=${RECEIPT}" \
+  "${SOURCE}/benchmarks/cc/a100_water8/run_mtu_thc_complete_water2_audit.sbatch"
+```
+
+The job requests one node and one GPU, then `topology_guard.py` enforces the
+receipt-pinned A100/PCI identity, NUMA node 3, and eight physical cores on CPUs
+`24-31`. Its fixed development grid uses `eri_tol=1e-8`,
+`rr_eig_cutoff=1e-6`, amplitude tolerances `1e-4` through `1e-7`, amplitude
+ranks 512 through 1024, and ERI candidates `512:1e-4`, `768:1e-5`, and
+`1024:1e-6`. Every acceptance, production, formal-validation, and performance
+flag remains false. These artifacts do not establish an iterative THC-CCSD
+energy or performance result.

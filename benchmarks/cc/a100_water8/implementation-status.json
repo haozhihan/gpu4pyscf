@@ -1,6 +1,6 @@
 {
   "schema": "gpu4pyscf.water8.implementation-status.v2",
-  "as_of_utc": "2026-09-15T04:21:32Z",
+  "as_of_utc": "2026-09-15T04:53:25Z",
   "purpose": "Candid implementation and MTU evidence ledger for the fixed WATER27 H2O8d2d single-A100 CCSD project.",
   "claim_policy": {
     "ten_x_claim_allowed": false,
@@ -20,7 +20,7 @@
     "g0_worktree": "analysis/research/ccsd/gpu4pyscf-g0-baseline",
     "feature_source_state": "rr-water4-tight-cutoff-continuation-thc-full-pair-total-identity-portable-snapshot-validation-and-fused-wvvvv-development",
     "feature_performance_eligible": false,
-    "feature_head_before_ledger_update": "30ddc82a33eae34b4df79e634132bbff85a66049",
+    "feature_head_before_ledger_update": "4e678784ee0143fa7dac14ca755de69474cb718e",
     "merged_implementation_commits": {
       "fused_r123": "29ceab6",
       "fixed_gpu_test_node": "56291e7",
@@ -55,7 +55,16 @@
       "rr_adaptive_ring_matrix_chain": "64d6c55",
       "algorithm7_pair_symmetrized_full_pair_identity": "7399a87",
       "portable_nfs_client_snapshot_identity": "6fe3e9e",
-      "fused_wvvvv_workspace_bounded": "30ddc82"
+      "fused_wvvvv_workspace_bounded": "30ddc82",
+      "water4_rr_stop_contract_correction": "0be4aba",
+      "fused_wvvvv_bound_state_audit": "ba47747",
+      "complete_thc_bound_water2_state": "192bedb",
+      "controlled_slurm_runtime_gate": "43692f3",
+      "receipt_bound_complete_thc_audit": "f1946a6",
+      "receipt_bound_complete_thc_launcher": "020cb40",
+      "rr_water4_rank_boundary_continuation": "c1b20df",
+      "rr_continuation_numeric_gate_closure": "2af67f5",
+      "rr_orthogonality_threshold_boundary_test": "4e67878"
     }
   },
   "contract": {
@@ -461,6 +470,14 @@
         "Commit 30ddc82 fuses the two exact projected Wvvvv ladders with a symmetric bilinear identity, caps fused auxiliary subblocks so two live rank-square transforms remain within the prior one-transform allowance, and records the logical workspace; singleton tails retain the sequential path."
       ],
       "local_verification": {
+        "receipt_bound_g4_continuation": {
+          "source_commit": "4e678784ee0143fa7dac14ca755de69474cb718e",
+          "focused_tests_passed": 94,
+          "focused_tests_failed": 0,
+          "independent_review": "no-P0-P1-after-numeric-gate-closure",
+          "slurm_jobs_submitted": 0,
+          "water8_submission_enabled": false
+        },
         "rr_thc_reviewer_focused": {
           "passed": 64,
           "skipped_environment": 1,
@@ -1097,9 +1114,20 @@
         "Legacy complete_equation_graph metadata is explicitly scoped to the current RR coarse residual graph and does not claim that paper Algorithms 1-10 are production-wired (85a3592).",
         "A from-zero Algorithms 1-10 audit assembler enforces the Algorithms 4+5 versus Algorithm 6 XOR, exactly one doubles back-projection, unprojected singles, shared transfer accounting, and caller-attested identity-token matching (5987560).",
         "Commit 7399a87 adds the raw Algorithm 7 contribution plus its physical pair transpose exactly once. Six exact full-pair FP64 cases, including nonzero T1 and both Algorithms 4+5 and Algorithm 6 paths, reproduce the independent RR/CD total doubles and singles residuals to roundoff.",
-        "The full-pair total identity now passes, while every direct-paper complete, accepted, formal, production, and performance flag remains false because the literal Eq. 35 Omega-C/Omega-D mapping is unresolved."
+        "The full-pair total identity now passes, while every direct-paper complete, accepted, formal, production, and performance flag remains false because the literal Eq. 35 Omega-C/Omega-D mapping is unresolved.",
+        "The complete WATER2 audit launcher is bound to one immutable release-B source, its sealed selected-GINT receipt, the receipt-pinned node, fixed provider/kernel choices, topology evidence, and write-once outputs. Its complete/formal/production/performance flags remain false."
       ],
       "local_verification": {
+        "receipt_bound_complete_water2_audit_launcher": {
+          "source_commit": "020cb40",
+          "focused_tests_passed": 117,
+          "related_tests_passed": 33,
+          "independent_review": "no-blocking-defect",
+          "slurm_jobs_submitted": 0,
+          "audit_only": true,
+          "production_enabled": false,
+          "performance_eligible": false
+        },
         "shared_decomposition_focused": {
           "passed": 25,
           "skipped_environment": 6,
