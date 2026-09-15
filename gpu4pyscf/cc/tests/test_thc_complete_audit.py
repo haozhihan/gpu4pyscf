@@ -279,6 +279,15 @@ def test_published_contract_is_asserted_but_numerical_gate_stays_closed():
     )
     assert metadata["algorithm7_eq35_equivalence"] is False
     assert metadata["algorithm7_sign_or_permutation_tuned"] is False
+    assert metadata["algorithm8_delta_xy_convention"] == (
+        "published-algorithm8-line8-kronecker-identity"
+    )
+    assert metadata["algorithm8_delta_xy_convention_uniquely_validated"] is True
+    assert metadata["algorithm8_delta_xy_pair_gram_alternative_rejected"] is True
+    assert metadata["algorithm10_published_eq43_requires_symmetric_core"] is True
+    assert metadata["algorithm10_symmetric_core_precondition_checked"] is True
+    assert metadata["algorithm10_nonsymmetric_core_equivalence"] is False
+    assert metadata["algorithm10_nonsymmetric_core_production_eligible"] is False
     assert metadata["accepted"] is False
     assert metadata["production_enabled"] is False
     assert metadata["complete_validated"] is False
@@ -576,6 +585,29 @@ def test_algorithm10_requires_symmetric_amplitude_core():
     nonsymmetric[0, 1] += 1e-8
     with pytest.raises(ValueError, match="amplitude_core must be symmetric"):
         _assemble(problem, amplitude_core=nonsymmetric)
+
+
+def test_complete_assembler_rejects_unresolved_delta_or_asymmetric_core(
+    monkeypatch,
+):
+    problem = _problem(seed=1622)
+
+    nonsymmetric = problem["amplitude_core"].copy()
+    nonsymmetric[0, 1] += 1e-8
+    with pytest.raises(ValueError, match="amplitude_core must be symmetric"):
+        _assemble(problem, amplitude_core=nonsymmetric)
+
+    result_type = complete.THCOmegaGHAlgorithm8Result
+    real_metadata = result_type.metadata
+
+    def metadata_with_unresolved_delta(self):
+        metadata = real_metadata(self)
+        metadata["delta_xy_convention_uniquely_validated"] = False
+        return metadata
+
+    monkeypatch.setattr(result_type, "metadata", metadata_with_unresolved_delta)
+    with pytest.raises(RuntimeError, match="resolved published delta_XY"):
+        _assemble(problem)
 
 
 @pytest.mark.parametrize("failure", ["nan", "tau-shape", "dtype", "fhat-shape"])

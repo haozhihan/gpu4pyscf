@@ -130,6 +130,200 @@ def _literal_algorithm10(y_occ, y_vir, core, fhat_ov, fhat_vo):
     return fhat_vo.T, coulomb, exchange
 
 
+def _amplitude_element_index_loop(y_occ, y_vir, core, i, j, a, b):
+    value = core.dtype.type(0)
+    for x in range(core.shape[0]):
+        for y in range(core.shape[1]):
+            value += (
+                y_occ[i, x]
+                * y_vir[a, x]
+                * core[x, y]
+                * y_occ[j, y]
+                * y_vir[b, y]
+            )
+    return value
+
+
+def _published_eq39_parts_index_loop(y_occ, y_vir, core, cholesky):
+    """Independent full-index Eq. 39 oracle without einsum/matmul."""
+
+    nocc, nvir = y_occ.shape[0], y_vir.shape[0]
+    omega_g = np.zeros((nocc, nvir), dtype=core.dtype)
+    omega_h = np.zeros_like(omega_g)
+    for i in range(nocc):
+        for a in range(nvir):
+            for k in range(nocc):
+                for c in range(nvir):
+                    for d in range(nvir):
+                        t_ikcd = _amplitude_element_index_loop(
+                            y_occ, y_vir, core, i, k, c, d
+                        )
+                        kd_ac = core.dtype.type(0)
+                        kc_ad = core.dtype.type(0)
+                        for auxiliary in range(cholesky.nchol):
+                            kd_ac += (
+                                cholesky.l_ov[auxiliary, k, d]
+                                * cholesky.l_vv[auxiliary, a, c]
+                            )
+                            kc_ad += (
+                                cholesky.l_ov[auxiliary, k, c]
+                                * cholesky.l_vv[auxiliary, a, d]
+                            )
+                        omega_g[i, a] += t_ikcd * (2 * kd_ac - kc_ad)
+            for k in range(nocc):
+                for l in range(nocc):
+                    for c in range(nvir):
+                        t_klac = _amplitude_element_index_loop(
+                            y_occ, y_vir, core, k, l, a, c
+                        )
+                        lc_ki = core.dtype.type(0)
+                        li_kc = core.dtype.type(0)
+                        for auxiliary in range(cholesky.nchol):
+                            lc_ki += (
+                                cholesky.l_ov[auxiliary, l, c]
+                                * cholesky.l_oo[auxiliary, k, i]
+                            )
+                            li_kc += (
+                                cholesky.l_oo[auxiliary, l, i]
+                                * cholesky.l_ov[auxiliary, k, c]
+                            )
+                        omega_h[i, a] -= t_klac * (2 * lc_ki - li_kc)
+    return omega_g, omega_h
+
+
+def _algorithm8_line8_metric_index_loop(
+    y_occ, y_vir, core, cholesky, line8_metric
+):
+    """Scalar Appendix schedule with a caller-selected line-8 object."""
+
+    nocc, nvir = y_occ.shape[0], y_vir.shape[0]
+    rank = core.shape[0]
+    omega_g = np.zeros((nocc, nvir), dtype=core.dtype)
+    omega_h = np.zeros_like(omega_g)
+    for auxiliary in range(cholesky.nchol):
+        a_x = np.zeros(rank, dtype=core.dtype)
+        b_xy = np.zeros((rank, rank), dtype=core.dtype)
+        for x in range(rank):
+            for i in range(nocc):
+                for a in range(nvir):
+                    a_x[x] += (
+                        y_occ[i, x]
+                        * y_vir[a, x]
+                        * cholesky.l_ov[auxiliary, i, a]
+                    )
+                    for y in range(rank):
+                        b_xy[x, y] += (
+                            y_occ[i, x]
+                            * y_vir[a, y]
+                            * cholesky.l_ov[auxiliary, i, a]
+                        )
+        c_xy = np.zeros((rank, rank), dtype=core.dtype)
+        for x in range(rank):
+            diagonal_x = core.dtype.type(0)
+            for z in range(rank):
+                diagonal_x += core[x, z] * a_x[z]
+            for y in range(rank):
+                c_xy[x, y] = (
+                    2 * line8_metric[x, y] * diagonal_x
+                    - b_xy[x, y] * core[x, y]
+                )
+        d_ia = np.zeros((nocc, nvir), dtype=core.dtype)
+        for i in range(nocc):
+            for a in range(nvir):
+                for x in range(rank):
+                    for y in range(rank):
+                        d_ia[i, a] += (
+                            y_occ[i, y] * y_vir[a, x] * c_xy[x, y]
+                        )
+        for i in range(nocc):
+            for a in range(nvir):
+                for b in range(nvir):
+                    omega_g[i, a] += (
+                        d_ia[i, b] * cholesky.l_vv[auxiliary, a, b]
+                    )
+                for j in range(nocc):
+                    omega_h[i, a] -= (
+                        cholesky.l_oo[auxiliary, j, i] * d_ia[j, a]
+                    )
+    return omega_g, omega_h
+
+
+def _published_eq43_parts_index_loop(y_occ, y_vir, core, fhat_ov, fhat_vo):
+    """Independent full-index published Eq. 43 oracle."""
+
+    nocc, nvir = y_occ.shape[0], y_vir.shape[0]
+    direct = fhat_vo.T.copy()
+    coulomb = np.zeros((nocc, nvir), dtype=core.dtype)
+    exchange = np.zeros_like(coulomb)
+    for i in range(nocc):
+        for a in range(nvir):
+            for k in range(nocc):
+                for c in range(nvir):
+                    coulomb[i, a] += (
+                        2
+                        * _amplitude_element_index_loop(
+                            y_occ, y_vir, core, i, k, a, c
+                        )
+                        * fhat_ov[k, c]
+                    )
+                    exchange[i, a] -= (
+                        _amplitude_element_index_loop(
+                            y_occ, y_vir, core, i, k, c, a
+                        )
+                        * fhat_ov[k, c]
+                    )
+    return direct, coulomb, exchange
+
+
+def test_algorithm8_kronecker_delta_matches_nonorthogonal_index_loop_eq39():
+    rng = np.random.default_rng(820)
+    nocc, nvir, amplitude_rank, rr_rank, nchol = 3, 4, 3, 2, 2
+    y_occ = rng.normal(size=(nocc, amplitude_rank))
+    y_vir = rng.normal(size=(nvir, amplitude_rank))
+    pair_gram = (y_occ.T @ y_occ) * (y_vir.T @ y_vir)
+    values, vectors = np.linalg.eigh(pair_gram)
+    inverse_sqrt = (
+        vectors * (1.0 / np.sqrt(values))[None, :]
+    ) @ vectors.T
+    rr_rows, _ = np.linalg.qr(rng.normal(size=(amplitude_rank, rr_rank)))
+    tau = rr_rows.T @ inverse_sqrt
+    rr_core = rng.normal(size=(rr_rank, rr_rank))
+    rr_core = (rr_core + rr_core.T) * 0.5
+    core = tau.T @ rr_core @ tau
+    cholesky = T1TransformedCholeskyBlocks(
+        rng.normal(size=(nchol, nocc, nocc)),
+        rng.normal(size=(nchol, nvir, nvir)),
+        rng.normal(size=(nchol, nocc, nvir)),
+    )
+
+    assert amplitude_rank >= 3
+    assert not np.allclose(pair_gram, np.eye(amplitude_rank))
+    np.testing.assert_allclose(
+        tau @ pair_gram @ tau.T,
+        np.eye(rr_rank),
+        atol=2e-14,
+        rtol=2e-14,
+    )
+    assert (tau @ pair_gram @ tau.T).shape != np.eye(amplitude_rank).shape
+
+    expected_g, expected_h = _published_eq39_parts_index_loop(
+        y_occ, y_vir, core, cholesky
+    )
+    identity_g, identity_h = _algorithm8_line8_metric_index_loop(
+        y_occ, y_vir, core, cholesky, np.eye(amplitude_rank)
+    )
+    gram_g, gram_h = _algorithm8_line8_metric_index_loop(
+        y_occ, y_vir, core, cholesky, pair_gram
+    )
+    observed = thc_omega_gh_algorithm8(y_occ, y_vir, core, cholesky)
+
+    np.testing.assert_allclose(observed.omega_g, expected_g, atol=2e-11)
+    np.testing.assert_allclose(observed.omega_h, expected_h, atol=2e-11)
+    np.testing.assert_allclose(identity_g, expected_g, atol=2e-11)
+    np.testing.assert_allclose(identity_h, expected_h, atol=2e-11)
+    assert np.max(np.abs(gram_g + gram_h - expected_g - expected_h)) > 1e-4
+
+
 def test_algorithm8_matches_published_eq39_not_literal_line13():
     y_occ, y_vir, core, cholesky, *_ = _problem(
         802, symmetric_core=True
@@ -353,11 +547,52 @@ def test_algorithm10_nonsymmetric_core_matches_literal_appendix_schedule():
         "published_equation43_equivalence_requires_symmetric_amplitude_core"
     ] is True
     assert metadata["nonsymmetric_amplitude_core_status"] == (
-        "appendix-literal-schedule-audit-only"
+        "appendix-literal-schedule-audit-only-not-production-eligible"
     )
 
 
-def test_algorithms8_to10_metadata_states_unresolved_conventions():
+def test_algorithm10_nonsymmetric_core_is_mixed_transpose_not_eq43():
+    (
+        y_occ,
+        y_vir,
+        core,
+        _cholesky,
+        _fhat_oo,
+        _fhat_vv,
+        fhat_ov,
+        fhat_vo,
+    ) = _problem(821)
+    assert not np.allclose(core, core.T)
+
+    published = _published_eq43_parts_index_loop(
+        y_occ, y_vir, core, fhat_ov, fhat_vo
+    )
+    transposed = _published_eq43_parts_index_loop(
+        y_occ, y_vir, core.T, fhat_ov, fhat_vo
+    )
+    observed = thc_omega_ij_algorithm10(
+        y_occ, y_vir, core, fhat_ov, fhat_vo
+    )
+
+    np.testing.assert_allclose(observed.direct_fhat_vo, published[0], atol=0)
+    np.testing.assert_allclose(observed.coulomb_like, published[1], atol=2e-12)
+    np.testing.assert_allclose(observed.exchange_like, transposed[2], atol=2e-12)
+    np.testing.assert_allclose(
+        observed.singles_ij,
+        published[0] + published[1] + transposed[2],
+        atol=2e-12,
+    )
+    assert np.max(np.abs(observed.singles_ij - sum(published))) > 1e-6
+
+    metadata = observed.metadata()
+    assert metadata["published_equation43_nonsymmetric_core_equivalence"] is False
+    assert metadata["appendix_algorithm10_nonsymmetric_core_mapping"] == (
+        "published-eq43-coulomb-uses-T-exchange-uses-T-transpose"
+    )
+    assert metadata["nonsymmetric_amplitude_core_production_eligible"] is False
+
+
+def test_algorithms8_to10_metadata_states_semantic_boundaries():
     (
         y_occ,
         y_vir,
@@ -401,9 +636,13 @@ def test_algorithms8_to10_metadata_states_unresolved_conventions():
         assert metadata["performance_eligible"] is False
         assert metadata["full_equation_ledger_uniquely_validated"] is False
         assert metadata["delta_xy_convention"] == (
-            "literal-kronecker-delta-from-algorithm-8"
+            "published-algorithm8-line8-kronecker-identity"
         )
-        assert metadata["delta_xy_convention_uniquely_validated"] is False
+        assert metadata["delta_xy_convention_uniquely_validated"] is True
+        assert metadata["delta_xy_pair_gram_alternative_rejected"] is True
+        assert metadata["delta_xy_primary_source_basis"] == (
+            "version-of-record-Algorithm8-line8-and-Eqs24-39"
+        )
         assert metadata["transformed_f_convention_uniquely_validated"] is False
         assert metadata[
             "literal_equation_oracle_requires_symmetric_amplitude_core"
@@ -419,8 +658,10 @@ def test_algorithms8_to10_metadata_states_unresolved_conventions():
         "published_equation43_equivalence_requires_symmetric_amplitude_core"
     ] is True
     assert metadata10["nonsymmetric_amplitude_core_status"] == (
-        "appendix-literal-schedule-audit-only"
+        "appendix-literal-schedule-audit-only-not-production-eligible"
     )
+    assert metadata10["published_equation43_nonsymmetric_core_equivalence"] is False
+    assert metadata10["nonsymmetric_amplitude_core_production_eligible"] is False
     metadata8 = algorithm8.metadata()
     assert metadata8["published_equation39_occupied_orientation"] == (
         "l_ji-times-D_ja"

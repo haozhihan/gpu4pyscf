@@ -1,6 +1,6 @@
 {
   "schema": "gpu4pyscf.water8.implementation-status.v2",
-  "as_of_utc": "2026-09-15T08:31:44.745212+00:00",
+  "as_of_utc": "2026-09-15T08:50:27.387266+00:00",
   "purpose": "Candid implementation and MTU evidence ledger for the fixed WATER27 H2O8d2d single-A100 CCSD project.",
   "claim_policy": {
     "ten_x_claim_allowed": false,
@@ -1256,7 +1256,7 @@
       "id": "G5",
       "name": "doubles-amplitude-thc-rr-ccsd",
       "evidence_state": "local_measured",
-      "state": "published-eq36-algebra-gate-passed-algorithms8-10-version-of-record-numbering-audited-exact-full-pair-and-compressed-amplitude-identities-passed-production-disabled",
+      "state": "published-eq36-and-algorithms8-10-semantic-algebra-gates-passed-exact-full-pair-and-compressed-amplitude-identities-passed-production-disabled",
       "decision": "advance-to-receipt-bound-water2-complete-equation-and-inexact-fit-gates-while-keeping-production-disabled",
       "method_class": "controlled-approximation",
       "acceptance_table": "A",
@@ -1296,7 +1296,8 @@
         "The published Eq. 36 algebra gate and exact full-pair total identity pass. Every direct-paper complete, accepted, formal, production, and performance flag remains false because accepted-fit, molecular convergence/accuracy, and A100 performance gates have not passed.",
         "The complete WATER2 audit launcher is bound to one immutable release-B source, its sealed selected-GINT receipt, the receipt-pinned node, fixed provider/kernel choices, topology evidence, and write-once outputs. Its complete/formal/production/performance flags remain false.",
         "Commit 1a9eeb3 validates final published Eq. 36 against Eq. 38 plus Algorithm 7 line 19 with one-dimensional, nontrivial pair-symmetric, independent scalar-loop, and full-pair tests; arbitrary nonsymmetric tensors remain equation-endpoint checks with overall equivalence out of scope.",
-        "Commit bfe9fc8 adds a compressed amplitude-THC equation-identity gate with RR rank and THC rank below OV, dense non-one-hot CP factors, nonzero T1, both joint-6 and separate-4-plus-5 paths, and an independently reconstructed Eq. 11-14 RR/CD oracle. Maximum doubles and singles differences are 1.20e-15 and 1.11e-16. The CP fit intentionally fails its accuracy gate and the ERI side remains analytic full-pair/CD, so accepted, complete, production, and performance flags remain false."
+        "Commit bfe9fc8 adds a compressed amplitude-THC equation-identity gate with RR rank and THC rank below OV, dense non-one-hot CP factors, nonzero T1, both joint-6 and separate-4-plus-5 paths, and an independently reconstructed Eq. 11-14 RR/CD oracle. Maximum doubles and singles differences are 1.20e-15 and 1.11e-16. The CP fit intentionally fails its accuracy gate and the ERI side remains analytic full-pair/CD, so accepted, complete, production, and performance flags remain false.",
+        "Local CPU semantic closure selects the version-of-record Algorithm 8 line-8 Kronecker delta with a rank-three nonorthogonal-y scalar-index oracle and rejects the pair-Gram substitution. A separate nonsymmetric-core scalar-index oracle proves that literal Algorithm 10 uses T in the Coulomb-like term and T-transpose in the exchange-like term, so only the symmetric-core endpoint is published Eq. 43; the complete assembler fails closed on an unresolved delta contract or asymmetric core. These are algebra results, not molecular accuracy or performance evidence."
       ],
       "local_verification": {
         "receipt_bound_complete_water2_audit_launcher": {
@@ -1421,7 +1422,7 @@
           "algorithm8_boundary": "Published Eq. 39 uses l_ji D_ja while Appendix Algorithm 8 line 13 prints l_ij D_ja; both are exposed separately for audit and no production convention is selected.",
           "focused_tests_passed": 70,
           "focused_tests_skipped_environment": 5,
-          "all_thc_tests_passed": 256,
+          "all_thc_tests_passed": 263,
           "all_thc_tests_skipped_environment": 34,
           "complete_ledger_entry_equation_semantics": "published equations whose tensors are directly emitted by each endpoint; dependencies consumed from earlier algorithms are not repeated",
           "complete_ledger_published_direct_equation_numbers": {
@@ -1454,10 +1455,26 @@
           "stale_eq35_acceptance_reason_removed": true,
           "legacy_arxiv_v1_eq35_acceptance_blocker": false,
           "unresolved_conventions": [
-            "literal Algorithm 8 Kronecker delta versus the inexact tau-metric/full-equation convention",
-            "physical-CD versus RR-effective T1-transformed Fock convention",
-            "published Eq. 43 formal equivalence for nonsymmetric amplitude cores"
-          ]
+            "published Eq. 39 l_ji versus literal Appendix Algorithm 8 line-13 l_ij production-composition boundary",
+            "physical-CD versus RR-effective T1-transformed Fock convention"
+          ],
+          "delta_xy_convention": "published-algorithm8-line8-kronecker-identity",
+          "delta_xy_convention_uniquely_validated": true,
+          "delta_xy_primary_source_basis": "version-of-record Algorithm 8 line 8 plus Eqs. 24 and 39",
+          "delta_xy_oracle": "rank=3 nonorthogonal y; independent dense scalar-index Eq. 39",
+          "pair_gram_substitution_rejected": true,
+          "tau_metric_scope": "tau @ pair_gram @ tau.T is the RR-projector P,Q identity and is not an X,Y-space replacement",
+          "algorithm10_nonsymmetric_core_relation": "Coulomb-like term uses T; exchange-like term uses T.T",
+          "algorithm10_nonsymmetric_core_published_eq43_equivalent": false,
+          "algorithm10_symmetric_core_published_eq43_endpoint_validated": true,
+          "complete_assembler_unresolved_delta_rejected": true,
+          "complete_assembler_asymmetric_core_rejected": true,
+          "semantic_closure_focused_tests_passed": 55,
+          "semantic_closure_focused_tests_skipped_environment": 5,
+          "delta_xy_identity_max_abs_error": 8.881784197001252e-16,
+          "delta_xy_pair_gram_counterexample_max_abs_error": 13.2791105970993,
+          "algorithm10_nonsymmetric_eq43_counterexample_max_abs_error": 1.391932169087088,
+          "algorithm10_mixed_transpose_identity_max_abs_error": 3.552713678800501e-15
         },
         "factorized_mp2_weights_state": {
           "source_commit": "4c175a1",
@@ -1534,7 +1551,11 @@
           "published_eq36_version_contract_asserted": true,
           "deprecated_require_eq35_parameter_semantics": "version-of-record contract assertion plus physical full-pair gauge precondition; no instance numerical equivalence claim",
           "algorithm7_instance_numerical_equivalence_audited": false,
-          "algorithm7_instance_numerical_equivalence": null
+          "algorithm7_instance_numerical_equivalence": null,
+          "algorithm8_resolved_delta_contract_required": true,
+          "algorithm8_pair_gram_alternative_rejected": true,
+          "algorithm10_symmetric_amplitude_core_required": true,
+          "algorithm10_nonsymmetric_core_production_eligible": false
         },
         "complete_thc_full_pair_total_identity": {
           "source_commit": "7399a87bd6daaa0b8e0deb0ebc30956f83e60543",
@@ -1638,7 +1659,7 @@
         "The algebraic provenance buckets do not identify a complete production Woooo/Wvvvv/ring partition; Algorithm 2 contains a core-independent bare-ovov contribution.",
         "Algorithms 4-10, MP2 weights, weighted ERI-THC preprocessing, F-hat, and the complete from-zero assembler remain audit endpoints and are not connected to the production iterative driver.",
         "Algorithm 8 has a paper boundary between published Eq. 39 (l_ji D_ja) and Appendix Algorithm 8 line 13 (l_ij D_ja); the endpoint exposes both and fails closed instead of choosing silently.",
-        "Algorithms 8-10 retain unresolved delta_XY and transformed-F conventions; published Eq. 43 formal equivalence is limited to a symmetric amplitude core, while the nonsymmetric-core schedule is Appendix-literal audit only.",
+        "The Algorithm 8 Kronecker delta and Algorithm 10 nonsymmetric-core transpose relation are resolved by local scalar-index algebra. The published Eq. 39 versus literal Appendix line-13 orientation and the physical-CD versus RR-effective transformed-F convention remain separate unresolved composition boundaries; every production flag stays false.",
         "No inexact THC production substitution is accepted until equation-level composition plus water2 and water4 residual/accuracy gates pass.",
         "Jobs 62650 and 62651 are non-fixed-node CUDA correctness audits and contain no formal accuracy or performance evidence.",
         "The final published Eq. 36 algebra gate is local small-tensor evidence only. The complete assembler asserts the equation-version contract and optional gauge precondition but does not claim per-instance dense numerical equivalence; that remains the separate joint-audit oracle.",
@@ -1646,7 +1667,7 @@
       ],
       "missing": [
         "A100 fused full-pair endpoint validation from the frozen A2 snapshot.",
-        "A uniquely justified published Algorithm 8 Eq. 39/Appendix line-13 convention and complete delta_XY equation ledger using the independently audited F-hat builder.",
+        "A production-composition decision for published Algorithm 8 Eq. 39 l_ji versus literal Appendix line-13 l_ij, together with the physical-CD versus RR-effective transformed-F convention using the independently audited F-hat builder.",
         "Production-driver integration only after all composition gates pass.",
         "Term-by-term inexact WATER2 and WATER4 equation comparisons, followed only for a passing WATER8 candidate by the eight-ghost-monomer counterpoise records.",
         "THC fit-inclusive qualified water8 timing and error.",

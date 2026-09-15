@@ -227,9 +227,23 @@ Algorithms 8--10 expose Omega-G/H singles, the Omega-E doubles core, and
 Omega-I/J singles separately. Published Eq. 39 requires the occupied orientation
 `Lhat_ji D_ja`, whereas Appendix Algorithm 8 line 13 prints `Lhat_ij D_ja`.
 Both are retained, but only the published Eq. 39 result is the current
-equation-facing output. Algorithm 10's formal published Eq. 43 equivalence
-requires a symmetric amplitude core; nonsymmetric cores exercise only the
-literal appendix schedule. The final JCP version of record numbers Algorithm
+equation-facing output. The Algorithm 8 line-8 `delta_XY` convention is now
+resolved independently: the final paper prints a Kronecker delta, and a scalar
+index-loop expansion of published Eq. 24 into Eq. 39 agrees with that identity
+for rank-three nonorthogonal `y` factors. Replacing it by the pair Gram matrix
+fails the same oracle. Eqs. 10--14 establish
+`tau @ pair_gram @ tau.T = I` in the RR-projector `P,Q` space; that differently
+shaped identity does not replace `delta_XY` in the amplitude-THC auxiliary
+space.
+
+Algorithm 10's formal published Eq. 43 equivalence requires a symmetric
+amplitude core. A scalar index-loop counterexample with a deliberately
+nonsymmetric core shows the exact relation: the Appendix schedule uses `T` in
+the Coulomb-like `2*t` term and `T.T` in the exchange-like term. It therefore
+does not equal published Eq. 43 for a general nonsymmetric core. The standalone
+endpoint retains that case only as an audit diagnostic; the complete assembler
+rejects it, while the symmetric endpoint continues to agree with Eq. 43. The
+final JCP version of record numbers Algorithm
 8 as Eqs. 39--41, Algorithm 9 as Eqs. 40--42, and Algorithm 10 as Eq. 43; the
 corresponding arXiv-v1 numbers 38--40, 39--41, and 42 remain legacy metadata.
 The complete Algorithms 1--10 ledger records equations that each endpoint
@@ -319,9 +333,14 @@ has passed.
   and found no remaining P0--P2 defect. These counts establish local algebra
   behavior only; A100 validation of this commit is still missing.
 - Algorithms 8--10 pass independent dense published Eq. 39--43 audits, with
-  the published Eq. 39 versus Appendix line-13 and symmetric-core boundaries
-  recorded explicitly. The arXiv-v1 Eq. 38--42 numbering is retained only as
-  versioned legacy metadata.
+  the published Eq. 39 versus Appendix line-13 boundary recorded explicitly.
+  A rank-three nonorthogonal scalar-loop oracle selects the printed Kronecker
+  `delta_XY` and rejects the pair-Gram substitution. A separate scalar-loop
+  counterexample proves that nonsymmetric-core Algorithm 10 is a mixed
+  `T`/`T.T` expression rather than published Eq. 43, and the complete assembler
+  rejects both an unresolved delta contract and an asymmetric core. These are
+  local algebra results only. The arXiv-v1 Eq. 38--42 numbering is retained
+  only as versioned legacy metadata.
 - The provenance-bound T1-transformed inactive F-hat builder passes independent
   dense and provider audits without constructing four-index ERIs or doubles.
 - The Algorithms 1--10 audit assembler enforces the from-zero ledger, XOR

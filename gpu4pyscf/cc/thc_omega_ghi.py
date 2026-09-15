@@ -23,14 +23,22 @@ by ``Omega-E``, and the final ``Omega-I/J`` singles terms.
 
 The Cholesky arrays and hatted Fock blocks are already T1 transformed when
 they enter this module.  This endpoint deliberately does not manufacture
-those transformations: the paper's delta convention in Algorithm 8 and the
-mapping of the hatted Fock blocks to the complete residual have not yet been
-made unique by the repository's full-equation ledger.  In addition, literal
-Algorithm 8 line 13 uses ``l_ij`` where published Eqs. 24 and 39 require
-``l_ji`` once the T1 transform removes Cholesky-matrix symmetry.  The
+those transformations.  The final paper prints a Kronecker ``delta_XY`` in
+Algorithm 8 line 8.  Expanding published Eq. 24 into Eq. 39 fixes that object
+as the identity in the amplitude-THC auxiliary space even when the columns
+of ``y`` are nonorthogonal.  The Eq. 10--14 metric instead orthogonalizes the
+RR projector in its distinct ``P,Q`` space; it is not a replacement for this
+``delta_XY``.  The hatted-Fock mapping to the complete residual remains a
+separate composition gate.
+
+Literal Algorithm 8 line 13 uses ``l_ij`` where published Eqs. 24 and 39
+require ``l_ji`` once the T1 transform removes Cholesky-matrix symmetry.  The
 published Eq. 39 result and the literal appendix result are therefore
-retained separately.  These routines are algebraic audits only and are not
-wired to the production THC-RR driver.
+retained separately.  Likewise, for a nonsymmetric amplitude core, literal
+Algorithm 10 uses the core in the Coulomb-like term and its transpose in the
+exchange-like term; it is published Eq. 43 only at the symmetric-core
+endpoint.  These routines are algebraic audits only and are not wired to the
+production THC-RR driver.
 """
 
 from __future__ import annotations
@@ -189,8 +197,26 @@ def _audit_metadata(
         "gpu_performance_claim": False,
         "complete_ccsd_residual": False,
         "full_equation_ledger_uniquely_validated": False,
-        "delta_xy_convention": "literal-kronecker-delta-from-algorithm-8",
-        "delta_xy_convention_uniquely_validated": False,
+        "delta_xy_convention": (
+            "published-algorithm8-line8-kronecker-identity"
+        ),
+        "delta_xy_convention_uniquely_validated": True,
+        "delta_xy_primary_source_basis": (
+            "version-of-record-Algorithm8-line8-and-Eqs24-39"
+        ),
+        "delta_xy_dense_oracle_scope": (
+            "rank-at-least-3-nonorthogonal-y-symmetric-core-index-loop"
+        ),
+        "delta_xy_pair_gram_alternative_rejected": True,
+        "delta_xy_tau_metric_scope": (
+            "tau-pair_gram-tau_transpose-is-RR-projector-PQ-identity;"
+            "it-does-not-replace-amplitude-THC-delta_XY"
+        ),
+        "delta_xy_dependency": {
+            8: "direct-algorithm8-line8",
+            9: "indirect-through-algorithm8-xi",
+            10: "none",
+        }[algorithm],
         "transformed_f_convention": (
             "caller-supplied-hatted-F-blocks-from-published-equations-42-43"
         ),
@@ -416,9 +442,15 @@ class THCOmegaIJAlgorithm10Result:
                 "direct_fhat_vo_included": True,
                 "published_equation43_equivalence_requires_symmetric_"
                 "amplitude_core": True,
-                "nonsymmetric_amplitude_core_status": (
-                    "appendix-literal-schedule-audit-only"
+                "published_equation43_symmetric_core_endpoint_validated": True,
+                "published_equation43_nonsymmetric_core_equivalence": False,
+                "appendix_algorithm10_nonsymmetric_core_mapping": (
+                    "published-eq43-coulomb-uses-T-exchange-uses-T-transpose"
                 ),
+                "nonsymmetric_amplitude_core_status": (
+                    "appendix-literal-schedule-audit-only-not-production-eligible"
+                ),
+                "nonsymmetric_amplitude_core_production_eligible": False,
                 "actual_schedule": (
                     "NumPy/CuPy matrix products in Appendix Algorithm 10 order"
                 ),
@@ -490,9 +522,11 @@ def thc_omega_gh_algorithm8(
         l_vv = cholesky.l_vv[a0:a1]
         l_ov = cholesky.l_ov[a0:a1]
 
-        # Algorithm 8, lines 6--9.  ``delta_xy`` is the literal Kronecker
-        # delta printed on line 8; the full residual ledger has not yet fixed
-        # whether a transformed convention changes this object.
+        # Algorithm 8, lines 6--9.  ``delta_xy`` is the Kronecker identity
+        # printed on line 8.  Direct expansion of published Eq. 24 into
+        # Eq. 39 retains this identity for nonorthogonal y columns.  The
+        # Eq. 10--14 tau/pair metric acts in the distinct RR-projector P,Q
+        # space and must not be substituted here.
         a_ax = xp.einsum("Aia,iX,aX->AX", l_ov, y_occ, y_vir)
         b_axy = xp.einsum("Aia,iX,aY->AXY", l_ov, y_occ, y_vir)
         diagonal_ax = a_ax @ amplitude_core.T
@@ -672,9 +706,11 @@ def thc_omega_ij_algorithm10(
     """Evaluate the Algorithm 10 ``Omega-I/J`` singles contribution.
 
     The result is formally identified with published Eq. 43 only for a
-    symmetric amplitude core.  A nonsymmetric core remains useful as a
-    transpose test, but its result audits only the literal Appendix
-    Algorithm 10 schedule.
+    symmetric amplitude core.  For a nonsymmetric core, the literal Appendix
+    schedule uses ``T`` in the Coulomb-like term and ``T.T`` in the
+    exchange-like term.  A nonsymmetric core remains useful as a transpose
+    test, but that mixed expression is audit-only and is not production
+    eligible.
     """
 
     xp, dtype, nocc, nvir, rank = _validate_amplitudes(

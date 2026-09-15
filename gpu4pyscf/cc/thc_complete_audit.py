@@ -821,6 +821,15 @@ class THCCompleteAuditResult:
             "amplitude_core_symmetry_tolerance": float(
                 self.amplitude_core_symmetry_tolerance
             ),
+            "algorithm8_delta_xy_convention": (
+                "published-algorithm8-line8-kronecker-identity"
+            ),
+            "algorithm8_delta_xy_convention_uniquely_validated": True,
+            "algorithm8_delta_xy_pair_gram_alternative_rejected": True,
+            "algorithm10_published_eq43_requires_symmetric_core": True,
+            "algorithm10_symmetric_core_precondition_checked": True,
+            "algorithm10_nonsymmetric_core_equivalence": False,
+            "algorithm10_nonsymmetric_core_production_eligible": False,
             "fhat_identity_tokens_complete": True,
             "identity_binding": (
                 "caller-fhat-and-eri-attestation-token-equivalence"
@@ -1136,6 +1145,21 @@ def assemble_complete_thc_ccsd_audit(
     )
     if not isinstance(algorithm_8, THCOmegaGHAlgorithm8Result):
         raise TypeError("Algorithm 8 endpoint returned an invalid result")
+    algorithm8_metadata = algorithm_8.metadata()
+    if (
+        algorithm8_metadata.get("delta_xy_convention")
+        != "published-algorithm8-line8-kronecker-identity"
+        or algorithm8_metadata.get("delta_xy_convention_uniquely_validated")
+        is not True
+        or algorithm8_metadata.get("delta_xy_pair_gram_alternative_rejected")
+        is not True
+        or algorithm8_metadata.get("production_enabled") is not False
+        or algorithm8_metadata.get("audit_only") is not True
+    ):
+        raise RuntimeError(
+            "Algorithm 8 must provide the resolved published delta_XY "
+            "contract while remaining audit-only"
+        )
     algorithm_9 = _omega_ghi.thc_omega_e_algorithm9(
         y_occ,
         y_vir,
@@ -1157,6 +1181,35 @@ def assemble_complete_thc_ccsd_audit(
     )
     if not isinstance(algorithm_10, THCOmegaIJAlgorithm10Result):
         raise TypeError("Algorithm 10 endpoint returned an invalid result")
+    algorithm10_metadata = algorithm_10.metadata()
+    if (
+        algorithm10_metadata.get(
+            "published_equation43_equivalence_requires_symmetric_amplitude_core"
+        )
+        is not True
+        or algorithm10_metadata.get(
+            "published_equation43_symmetric_core_endpoint_validated"
+        )
+        is not True
+        or algorithm10_metadata.get(
+            "published_equation43_nonsymmetric_core_equivalence"
+        )
+        is not False
+        or algorithm10_metadata.get(
+            "nonsymmetric_amplitude_core_production_eligible"
+        )
+        is not False
+        or algorithm10_metadata.get(
+            "appendix_algorithm10_nonsymmetric_core_mapping"
+        )
+        != "published-eq43-coulomb-uses-T-exchange-uses-T-transpose"
+        or algorithm10_metadata.get("production_enabled") is not False
+        or algorithm10_metadata.get("audit_only") is not True
+    ):
+        raise RuntimeError(
+            "Algorithm 10 must provide the symmetric-core published Eq. 43 "
+            "contract and reject nonsymmetric-core production promotion"
+        )
     for name, result in (
         ("algorithm_8", algorithm_8),
         ("algorithm_9", algorithm_9),
