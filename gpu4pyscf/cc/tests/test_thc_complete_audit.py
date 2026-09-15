@@ -286,6 +286,15 @@ def test_published_contract_is_asserted_but_numerical_gate_stays_closed():
     assert metadata["algorithm8_delta_xy_pair_gram_alternative_rejected"] is True
     assert metadata["algorithm10_published_eq43_requires_symmetric_core"] is True
     assert metadata["algorithm10_symmetric_core_precondition_checked"] is True
+    assert metadata[
+        "algorithm10_symmetric_core_precondition_check_semantics"
+    ] == (
+        "within-explicit-absolute-bounded-roundoff-tolerance-not-exact-"
+        "equality"
+    )
+    assert metadata[
+        "algorithm10_symmetric_core_precondition_exact_equality"
+    ] is True
     assert metadata["algorithm10_nonsymmetric_core_equivalence"] is False
     assert metadata["algorithm10_nonsymmetric_core_production_eligible"] is False
     assert metadata["amplitude_core_symmetry_hard_limit"] == (
@@ -635,6 +644,18 @@ def test_roundoff_level_core_asymmetry_is_audit_compatible_under_hard_limit():
     assert metadata["amplitude_core_max_asymmetry"] == asymmetry
     assert metadata["amplitude_core_symmetry_tolerance"] == (
         complete.FP64_AMPLITUDE_CORE_SYMMETRY_HARD_LIMIT
+    )
+    assert metadata[
+        "algorithm10_symmetric_core_precondition_checked"
+    ] is True
+    assert metadata[
+        "algorithm10_symmetric_core_precondition_exact_equality"
+    ] is False
+    assert metadata[
+        "algorithm10_symmetric_core_precondition_check_semantics"
+    ] == (
+        "within-explicit-absolute-bounded-roundoff-tolerance-not-exact-"
+        "equality"
     )
     assert metadata["production_enabled"] is False
 

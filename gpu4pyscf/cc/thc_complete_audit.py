@@ -852,6 +852,13 @@ class THCCompleteAuditResult:
             "algorithm8_delta_xy_pair_gram_alternative_rejected": True,
             "algorithm10_published_eq43_requires_symmetric_core": True,
             "algorithm10_symmetric_core_precondition_checked": True,
+            "algorithm10_symmetric_core_precondition_check_semantics": (
+                "within-explicit-absolute-bounded-roundoff-tolerance-not-"
+                "exact-equality"
+            ),
+            "algorithm10_symmetric_core_precondition_exact_equality": (
+                self.amplitude_core_max_asymmetry == 0.0
+            ),
             "algorithm10_nonsymmetric_core_equivalence": False,
             "algorithm10_nonsymmetric_core_production_eligible": False,
             "fhat_identity_tokens_complete": True,
