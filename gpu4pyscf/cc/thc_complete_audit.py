@@ -25,9 +25,11 @@ transpose is added by the complete residual assembler and both are retained
 separately for audit.  The singles schedule is
 ``A8.singles_gh + A10.singles_ij`` and is never back-projected.
 
-The result is deliberately not a production residual.  Algorithm 7's mapping
-to literal Eq. 35 remains unresolved, so the computed Algorithm 7 value is
-retained for audit while every acceptance and production flag stays false.
+The result is deliberately not a production residual.  The version-of-record
+Eq. 36 / Algorithm 7 identity is resolved in the physical full-pair gauge,
+while the submitted arXiv v1 Eq. 35 is retained only as a historical version
+diagnostic.  Resolving that algebra boundary does not validate the complete or
+inexact equations, so every acceptance and production flag stays false.
 """
 
 from __future__ import annotations
@@ -688,6 +690,7 @@ class THCCompleteAuditResult:
     ledger: THCCompleteAuditLedger
     amplitude_core_max_asymmetry: float
     amplitude_core_symmetry_tolerance: float
+    algorithm7_input_gauge_precondition_checked: bool
     _orbital_identity_json: str = field(repr=False, compare=False)
     _integral_identity_json: str = field(repr=False, compare=False)
     _hcore_identity_json: str = field(repr=False, compare=False)
@@ -736,7 +739,11 @@ class THCCompleteAuditResult:
         return {
             "schema": "gpu4pyscf.thc-complete-audit.v1",
             "paper": "Hohenstein-2022",
-            "paper_source": "arXiv:2111.11473v1",
+            "paper_source": (
+                "J. Chem. Phys. 156, 054102 (2022), "
+                "DOI:10.1063/5.0077770"
+            ),
+            "paper_source_version": "version-of-record",
             "covered_algorithms": list(range(1, 11)),
             "doubles_definition": (
                 "A1+A2+A3+((A4+A5) XOR A6)+(A7+A7.T)+A9"
@@ -757,9 +764,41 @@ class THCCompleteAuditResult:
             "algorithm7_pair_symmetrization_scope": (
                 "complete-residual-composition-only"
             ),
-            "algorithm7_eq35_mapping": "unresolved-by-paper-and-dense-audit",
+            "algorithm7_equation_version_contract_asserted": True,
+            "algorithm7_input_gauge_precondition_checked": bool(
+                self.algorithm7_input_gauge_precondition_checked
+            ),
+            "algorithm7_published_eq36_mapping": (
+                "eq38-plus-algorithm7-line19-in-full-pair-gauge"
+            ),
+            "algorithm7_published_eq36_contract_scope": (
+                "physical-full-pair-gauge"
+            ),
+            "algorithm7_published_eq36_status": (
+                "version-of-record-contract-asserted"
+            ),
+            "algorithm7_instance_numerical_equivalence_audited": False,
+            "algorithm7_instance_numerical_equivalence": None,
+            "algorithm7_instance_numerical_equivalence_oracle": (
+                "thc_omega_cd_joint_audit"
+            ),
+            "algorithm7_legacy_preprint_source": "arXiv:2111.11473v1",
+            "algorithm7_legacy_preprint_eq35_equivalence": False,
+            "algorithm7_legacy_preprint_eq35_status": (
+                "known-version-difference"
+            ),
+            "require_eq35_equivalence_parameter_status": "deprecated-name",
+            "require_eq35_equivalence_parameter_semantics": (
+                "assert-version-of-record-eq36-contract-and-check-"
+                "physical-full-pair-gauge-precondition"
+            ),
+            # Compatibility keys remain explicit about the old name.  The
+            # legacy preprint expression itself is still not equivalent.
+            "algorithm7_eq35_mapping": (
+                "deprecated-name-mapped-to-version-of-record-eq36"
+            ),
             "algorithm7_eq35_equivalence": False,
-            "algorithm7_eq35_status": "fail-closed",
+            "algorithm7_eq35_status": "legacy-preprint-version-difference",
             "algorithm7_sign_or_permutation_tuned": False,
             "amplitude_core_symmetry_required": True,
             "amplitude_core_max_asymmetry": float(
@@ -815,7 +854,7 @@ def _ledger(omega_ac_path: str) -> THCCompleteAuditLedger:
         (4, "thc_omega_a_algorithm4", (32,), "doubles", separate, "separate-4-plus-5"),
         (5, "thc_omega_c_algorithm5", (33,), "doubles", separate, "separate-4-plus-5"),
         (6, "thc_omega_ac_algorithm6", (34,), "doubles", not separate, "joint-6"),
-        (7, "thc_omega_d_algorithm7", (36, 37), "doubles", True, None),
+        (7, "thc_omega_d_algorithm7", (36, 37, 38), "doubles", True, None),
         (8, "thc_omega_gh_algorithm8", (38, 39, 40), "singles", True, None),
         (9, "thc_omega_e_algorithm9", (41,), "doubles", True, None),
         (10, "thc_omega_ij_algorithm10", (42,), "singles", True, None),
@@ -894,21 +933,22 @@ def assemble_complete_thc_ccsd_audit(
     ``omega_ac_path`` selects either separate Algorithms 4 and 5 or joint
     Algorithm 6.  It is an exclusive choice; no execution path can add both.
 
-    ``require_eq35_equivalence=True`` fails before contractions because the
-    Algorithm 7 / literal Eq. 35 map is unresolved.  With the default false
-    value, raw Algorithm 7 and its physical pair-symmetric composition are
-    computed and retained, but the returned result can never be accepted or
-    enabled for production.
+    ``require_eq35_equivalence`` is retained as a deprecated parameter name.
+    When true it asserts the scoped version-of-record Eq. 36 contract
+    (published Eq. 38 plus Algorithm 7 line 19) and checks that the factor
+    cores satisfy the physical full-pair-gauge precondition.  It does not run
+    the dense numerical equivalence audit for this instance; that evidence is
+    provided only by ``thc_omega_cd_joint_audit``.  The deprecated name never
+    requests the erroneous submitted-preprint Eq. 35 expression.
+
+    Raw Algorithm 7 and its physical pair-symmetric composition are computed
+    and retained, but the returned result can never be accepted or enabled
+    for production by this audit endpoint.
     """
 
     require_eq35_equivalence = _boolean(
         require_eq35_equivalence, name="require_eq35_equivalence"
     )
-    if require_eq35_equivalence:
-        raise NotImplementedError(
-            "literal Eq. 35 equivalence is unresolved; the complete THC "
-            "assembly remains audit-only and fail-closed"
-        )
     if type(omega_ac_path) is not str or omega_ac_path not in _OMEGA_AC_PATHS:
         raise ValueError(
             "omega_ac_path must be 'separate-4-plus-5' or 'joint-6'"
@@ -952,6 +992,23 @@ def assemble_complete_thc_ccsd_audit(
         transfer_counter=transfer_counter,
         amplitude_core_symmetry_tolerance=amplitude_core_symmetry_tolerance,
     )
+    if require_eq35_equivalence:
+        eri_core_asymmetry = _read_control_scalar(
+            xp,
+            xp.max(xp.abs(eri_factors.core - eri_factors.core.T)),
+            transfer_counter=transfer_counter,
+            operation="thc_complete_audit_eq36_eri_pair_symmetry",
+        )
+        eri_core_asymmetry = float(eri_core_asymmetry)
+        if eri_core_asymmetry > amplitude_core_symmetry_tolerance:
+            raise ValueError(
+                "deprecated require_eq35_equivalence requests the "
+                "version-of-record Eq. 36 identity in the physical "
+                "full-pair gauge, but the ERI core is not symmetric within "
+                "the explicit tolerance: "
+                f"max_asymmetry={eri_core_asymmetry:.17g}, "
+                f"tolerance={amplitude_core_symmetry_tolerance:.17g}"
+            )
     (
         fhat_provenance_context,
         orbital_identity_token,
@@ -1031,12 +1088,22 @@ def assemble_complete_thc_ccsd_audit(
         raise TypeError("Algorithm 7 endpoint returned an invalid result")
     algorithm7_metadata = algorithm_7.metadata()
     if (
-        algorithm7_metadata.get("eq35_literal_equivalence") is not False
+        algorithm7_metadata.get(
+            "published_eq36_literal_equivalence_in_full_pair_gauge"
+        )
+        is not True
+        or algorithm7_metadata.get(
+            "published_eq36_literal_equivalence_unconditional"
+        )
+        is not False
+        or algorithm7_metadata.get("paper_source_version")
+        != "version-of-record"
         or algorithm7_metadata.get("production_enabled") is not False
         or algorithm7_metadata.get("audit_only") is not True
     ):
         raise RuntimeError(
-            "Algorithm 7 must retain the unresolved, audit-only Eq. 35 gate"
+            "Algorithm 7 must provide the scoped version-of-record Eq. 36 "
+            "algebra contract while remaining audit-only"
         )
 
     algorithm8_cholesky = T1TransformedCholeskyBlocks(
@@ -1105,7 +1172,7 @@ def assemble_complete_thc_ccsd_audit(
     # In the RR/CD complete-residual convention, the raw Algorithm 7 endpoint
     # needs its X<->X' counterpart.  Add that pair transpose explicitly at
     # composition.  The raw paper endpoint remains unchanged and is retained
-    # alongside this value for the unresolved Eq. 35 audit.
+    # alongside this value for the published Eq. 36 algebra audit.
     algorithm_7_pair_symmetrized = (
         algorithm_7.combined + algorithm_7.combined.T
     )
@@ -1165,6 +1232,9 @@ def assemble_complete_thc_ccsd_audit(
         ledger=ledger,
         amplitude_core_max_asymmetry=amplitude_core_max_asymmetry,
         amplitude_core_symmetry_tolerance=amplitude_core_symmetry_tolerance,
+        algorithm7_input_gauge_precondition_checked=(
+            require_eq35_equivalence
+        ),
         _orbital_identity_json=_canonical_json(orbital_identity_token),
         _integral_identity_json=_canonical_json(integral_identity_token),
         _hcore_identity_json=_canonical_json(hcore_identity_token),

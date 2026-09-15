@@ -210,9 +210,14 @@ def test_algorithms_4_plus_5_and_algorithm_6_are_strict_xor(monkeypatch):
         for entry in result.ledger.entries:
             assert entry.coefficient == 1.0
             assert entry.individual_backprojection_count == 0
+        algorithm7_entry = next(
+            entry for entry in result.ledger.entries if entry.algorithm == 7
+        )
+        assert algorithm7_entry.equations == (36, 37, 38)
+        assert algorithm7_entry.as_dict()["equations"] == [36, 37, 38]
 
 
-def test_algorithm7_value_is_retained_but_acceptance_stays_fail_closed():
+def test_published_contract_is_asserted_but_numerical_gate_stays_closed():
     problem = _problem(seed=1603)
     result = _assemble(problem)
     metadata = result.metadata()
@@ -227,8 +232,25 @@ def test_algorithm7_value_is_retained_but_acceptance_stays_fail_closed():
     assert metadata["algorithm7_pair_symmetrization"] == (
         "raw-plus-pair-transpose"
     )
-    assert metadata["algorithm7_eq35_mapping"] == (
-        "unresolved-by-paper-and-dense-audit"
+    assert metadata["algorithm7_equation_version_contract_asserted"] is True
+    assert metadata["algorithm7_input_gauge_precondition_checked"] is False
+    assert metadata["algorithm7_published_eq36_mapping"] == (
+        "eq38-plus-algorithm7-line19-in-full-pair-gauge"
+    )
+    assert metadata["algorithm7_published_eq36_contract_scope"] == (
+        "physical-full-pair-gauge"
+    )
+    assert metadata["algorithm7_published_eq36_status"] == (
+        "version-of-record-contract-asserted"
+    )
+    assert metadata["algorithm7_instance_numerical_equivalence_audited"] is False
+    assert metadata["algorithm7_instance_numerical_equivalence"] is None
+    assert metadata["algorithm7_instance_numerical_equivalence_oracle"] == (
+        "thc_omega_cd_joint_audit"
+    )
+    assert metadata["algorithm7_legacy_preprint_eq35_equivalence"] is False
+    assert metadata["require_eq35_equivalence_parameter_status"] == (
+        "deprecated-name"
     )
     assert metadata["algorithm7_eq35_equivalence"] is False
     assert metadata["algorithm7_sign_or_permutation_tuned"] is False
@@ -236,8 +258,93 @@ def test_algorithm7_value_is_retained_but_acceptance_stays_fail_closed():
     assert metadata["production_enabled"] is False
     assert metadata["complete_validated"] is False
 
-    with pytest.raises(NotImplementedError, match="Eq. 35 equivalence is unresolved"):
+    required = _assemble(problem, require_eq35_equivalence=True)
+    required_metadata = required.metadata()
+    assert required_metadata[
+        "algorithm7_equation_version_contract_asserted"
+    ] is True
+    assert required_metadata[
+        "algorithm7_input_gauge_precondition_checked"
+    ] is True
+    assert required_metadata[
+        "algorithm7_instance_numerical_equivalence_audited"
+    ] is False
+    assert required_metadata["algorithm7_instance_numerical_equivalence"] is None
+    assert required.accepted is False
+    assert required.production_enabled is False
+    assert required.complete_validated is False
+    assert required.complete_ccsd_residual is False
+    assert required_metadata["formal_full_residual_eligible"] is False
+    assert required_metadata["performance_eligible"] is False
+
+
+def test_missing_published_eq36_scope_metadata_fails_closed(monkeypatch):
+    problem = _problem(seed=1613)
+    result_type = complete.THCOmegaDAlgorithm7Result
+    real_metadata = result_type.metadata
+
+    def metadata_without_published_scope(self):
+        metadata = real_metadata(self)
+        metadata.pop(
+            "published_eq36_literal_equivalence_in_full_pair_gauge"
+        )
+        return metadata
+
+    monkeypatch.setattr(result_type, "metadata", metadata_without_published_scope)
+    with pytest.raises(RuntimeError, match="version-of-record Eq. 36"):
+        _assemble(problem)
+
+
+def test_deprecated_eq35_parameter_requires_physical_eri_pair_gauge():
+    problem = _problem(seed=1614)
+    factors = problem["eri_factors"].factors
+    nonsymmetric_core = factors.core.copy()
+    nonsymmetric_core[0, 1] += 0.125
+    raw = ERITHCFactors(
+        factors.x_occ, factors.x_vir, nonsymmetric_core
+    )
+    problem["eri_factors"] = complete.IdentityAttestedERITHCFactors(
+        raw,
+        orbital_identity_token=problem["orbital_identity_token"],
+        integral_identity_token=problem["integral_identity_token"],
+    )
+
+    with pytest.raises(ValueError, match="physical full-pair gauge"):
         _assemble(problem, require_eq35_equivalence=True)
+
+
+def test_forged_algorithm7_value_cannot_claim_instance_equivalence(monkeypatch):
+    problem = _problem(seed=1615)
+    original = complete._omega_d.thc_omega_d_algorithm7
+    baseline = _assemble(problem, require_eq35_equivalence=True)
+
+    def forged_combined(*args, **kwargs):
+        result = original(*args, **kwargs)
+        corruption = np.full_like(result.combined, 0.375)
+        return replace(result, combined=result.combined + corruption)
+
+    monkeypatch.setattr(
+        complete._omega_d, "thc_omega_d_algorithm7", forged_combined
+    )
+    forged = _assemble(problem, require_eq35_equivalence=True)
+    metadata = forged.metadata()
+
+    assert not np.allclose(
+        forged.algorithm_7.combined,
+        baseline.algorithm_7.combined,
+        atol=1e-14,
+        rtol=1e-14,
+    )
+    assert metadata["algorithm7_equation_version_contract_asserted"] is True
+    assert metadata["algorithm7_input_gauge_precondition_checked"] is True
+    assert metadata["algorithm7_instance_numerical_equivalence_audited"] is False
+    assert metadata["algorithm7_instance_numerical_equivalence"] is None
+    assert metadata["accepted"] is False
+    assert metadata["complete_validated"] is False
+    assert metadata["complete_ccsd_residual"] is False
+    assert metadata["formal_full_residual_eligible"] is False
+    assert metadata["production_enabled"] is False
+    assert metadata["performance_eligible"] is False
 
 
 def test_fhat_blocks_flow_in_the_printed_directions_and_a9_reuses_a8(

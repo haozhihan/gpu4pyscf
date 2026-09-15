@@ -7,7 +7,7 @@ from gpu4pyscf.cc.thc_eri import ERITHCFactors
 from gpu4pyscf.cc.thc_omega_d import thc_omega_d_algorithm7
 
 
-def _problem(seed=701, dtype=np.float64):
+def _problem(seed=701, dtype=np.float64, *, pair_symmetric=False):
     rng = np.random.default_rng(seed)
     nocc, nvir = 2, 3
     amplitude_rank, eri_rank = 3, 4
@@ -19,6 +19,9 @@ def _problem(seed=701, dtype=np.float64):
     x_occ = rng.normal(size=(nocc, eri_rank)).astype(dtype)
     x_vir = rng.normal(size=(nvir, eri_rank)).astype(dtype)
     eri_core = rng.normal(size=(eri_rank, eri_rank)).astype(dtype)
+    if pair_symmetric:
+        amplitude_core = (amplitude_core + amplitude_core.T) / dtype(2)
+        eri_core = (eri_core + eri_core.T) / dtype(2)
     return y_occ, y_vir, amplitude_core, ERITHCFactors(
         x_occ, x_vir, eri_core
     )
@@ -50,7 +53,7 @@ def _dense_ovov(eri):
     )
 
 
-def _dense_eq36(projector, t2):
+def _dense_eq37_intermediate(projector, t2):
     exchange_t2 = t2.swapaxes(2, 3)
     return np.einsum(
         "Xjb,ijab->Xia", projector, 2 * t2 - exchange_t2
@@ -63,7 +66,7 @@ def _dense_s_exchange(projector, t2):
     )
 
 
-def _dense_eq37(r_intermediate, ovov):
+def _dense_eq38(r_intermediate, ovov):
     exchange_ovov = ovov.transpose(0, 3, 2, 1)
     return 0.25 * np.einsum(
         "Xia,Yjb,iajb->XY",
@@ -83,7 +86,7 @@ def _dense_spurious_removal(s_exchange, ovov):
     )
 
 
-def _literal_dense_eq35(projector, t2, ovov):
+def _legacy_preprint_dense_eq35(projector, t2, ovov):
     anti_t2 = 2 * t2 - t2.swapaxes(2, 3)
     anti_ovov = 2 * ovov - ovov.transpose(0, 3, 2, 1)
     difference_t2 = t2 - t2.swapaxes(2, 3)
@@ -102,7 +105,25 @@ def _literal_dense_eq35(projector, t2, ovov):
     )
 
 
-def test_algorithm7_eq36_and_s_match_dense_nonsymmetric_oracles():
+def _published_dense_eq36(projector, t2, ovov):
+    two_t_minus_virtual_swap = 2 * t2 - t2.swapaxes(2, 3)
+    two_eri_minus_exchange = 2 * ovov - ovov.transpose(0, 3, 2, 1)
+    first = np.einsum(
+        "ikac,kcld,jlbd->ijab",
+        two_t_minus_virtual_swap,
+        two_eri_minus_exchange,
+        two_t_minus_virtual_swap,
+        optimize=True,
+    )
+    second = np.einsum(
+        "ikca,kdlc,jldb->ijab", t2, ovov, t2, optimize=True
+    )
+    return 0.25 * np.einsum(
+        "Xia,Yjb,ijab->XY", projector, projector, first + second
+    )
+
+
+def test_algorithm7_eq37_and_s_match_dense_nonsymmetric_oracles():
     y_occ, y_vir, amplitude_core, eri = _problem(702)
     assert not np.allclose(amplitude_core, amplitude_core.T)
     assert not np.allclose(eri.core, eri.core.T)
@@ -114,7 +135,7 @@ def test_algorithm7_eq36_and_s_match_dense_nonsymmetric_oracles():
 
     np.testing.assert_allclose(
         result.r_intermediate,
-        _dense_eq36(projector, t2),
+        _dense_eq37_intermediate(projector, t2),
         atol=2e-11,
         rtol=2e-12,
     )
@@ -126,19 +147,19 @@ def test_algorithm7_eq36_and_s_match_dense_nonsymmetric_oracles():
     )
 
 
-def test_algorithm7_main_matches_dense_eq37_with_nonsymmetric_cores():
+def test_algorithm7_main_matches_dense_eq38_with_nonsymmetric_cores():
     y_occ, y_vir, amplitude_core, eri = _problem(703)
     assert not np.allclose(amplitude_core, amplitude_core.T)
     assert not np.allclose(eri.core, eri.core.T)
     projector = _pair_projector(y_occ, y_vir)
     t2 = _dense_amplitudes(y_occ, y_vir, amplitude_core)
     ovov = _dense_ovov(eri)
-    r_dense = _dense_eq36(projector, t2)
+    r_dense = _dense_eq37_intermediate(projector, t2)
 
     result = thc_omega_d_algorithm7(y_occ, y_vir, amplitude_core, eri)
     np.testing.assert_allclose(
-        result.main_eq37,
-        _dense_eq37(r_dense, ovov),
+        result.main_eq38,
+        _dense_eq38(r_dense, ovov),
         atol=2e-10,
         rtol=2e-12,
     )
@@ -162,14 +183,14 @@ def test_algorithm7_spurious_removal_matches_independent_dense_oracle():
     )
     np.testing.assert_allclose(
         result.combined,
-        result.main_eq37 + result.spurious_removal,
+        result.main_eq38 + result.spurious_removal,
         atol=0,
         rtol=0,
     )
     assert result.sigma_thc is result.combined
 
 
-def test_literal_eq35_one_dimensional_counterexample_is_fail_closed():
+def test_legacy_preprint_eq35_counterexample_remains_explicit():
     rng = np.random.default_rng(705)
     y_occ = rng.normal(size=(1, 1))
     y_vir = rng.normal(size=(1, 1))
@@ -181,13 +202,17 @@ def test_literal_eq35_one_dimensional_counterexample_is_fail_closed():
     )
     projector = _pair_projector(y_occ, y_vir)
     t2 = _dense_amplitudes(y_occ, y_vir, amplitude_core)
-    literal_eq35 = _literal_dense_eq35(projector, t2, _dense_ovov(eri))
+    literal_eq35 = _legacy_preprint_dense_eq35(
+        projector, t2, _dense_ovov(eri)
+    )
     result = thc_omega_d_algorithm7(y_occ, y_vir, amplitude_core, eri)
 
     assert not np.allclose(result.combined, literal_eq35, atol=1e-14, rtol=1e-12)
     assert result.metadata()["eq35_literal_equivalence"] is False
-    assert result.metadata()["eq35_literal_status"] == "fail-closed"
-    with pytest.raises(NotImplementedError, match="literal Eq. 35"):
+    assert result.metadata()["eq35_literal_status"] == (
+        "legacy-preprint-version-difference"
+    )
+    with pytest.raises(NotImplementedError, match="arXiv:2111.11473v1"):
         thc_omega_d_algorithm7(
             y_occ,
             y_vir,
@@ -195,6 +220,23 @@ def test_literal_eq35_one_dimensional_counterexample_is_fail_closed():
             eri,
             require_eq35_literal_equivalence=True,
         )
+
+
+def test_published_eq36_matches_algorithm7_sum_in_full_pair_gauge():
+    y_occ, y_vir, amplitude_core, eri = _problem(
+        713, pair_symmetric=True
+    )
+    projector = _pair_projector(y_occ, y_vir)
+    t2 = _dense_amplitudes(y_occ, y_vir, amplitude_core)
+    published_eq36 = _published_dense_eq36(
+        projector, t2, _dense_ovov(eri)
+    )
+
+    result = thc_omega_d_algorithm7(y_occ, y_vir, amplitude_core, eri)
+
+    np.testing.assert_allclose(
+        result.combined, published_eq36, atol=3e-10, rtol=3e-12
+    )
 
 
 def test_algorithm7_x_blocking_does_not_change_any_output():
@@ -206,7 +248,7 @@ def test_algorithm7_x_blocking_does_not_change_any_output():
     for name in (
         "r_intermediate",
         "s_exchange",
-        "main_eq37",
+            "main_eq38",
         "spurious_removal",
         "combined",
     ):
@@ -228,16 +270,29 @@ def test_algorithm7_metadata_is_explicitly_audit_only():
     result = thc_omega_d_algorithm7(*_problem(707), x_block_size=2)
     metadata = result.metadata()
     assert metadata["paper_algorithm"] == 7
-    assert metadata["paper_equations_referenced"] == [35, 36, 37]
-    assert metadata["implemented_equations"] == [36, 37]
-    assert metadata["unimplemented_equations"] == [35]
-    assert metadata["eq35_scope"] == "referenced_but_not_literal_equivalent"
-    assert metadata["main_convention"] == "equation-37"
+    assert metadata["paper_source_version"] == "version-of-record"
+    assert metadata["paper_equations_referenced"] == [36, 37, 38]
+    assert metadata["implemented_equations"] == [37, 38]
+    assert metadata["dense_audit_equations"] == [36]
+    assert metadata[
+        "published_eq36_literal_equivalence_in_full_pair_gauge"
+    ] is True
+    assert metadata[
+        "published_eq36_literal_equivalence_unconditional"
+    ] is False
+    assert metadata["published_eq36_equivalence_requires_full_pair_gauge"] is True
+    assert metadata["main_convention"] == "version-of-record-equation-38"
     assert metadata["spurious_removal_is_signed_addend"] is True
-    assert metadata["combined_convention"] == "appendix-algorithm-7-line-22"
+    assert metadata["combined_convention"] == (
+        "version-of-record-appendix-algorithm-7-line-19"
+    )
+    assert metadata["legacy_preprint_source"] == "arXiv:2111.11473v1"
+    assert metadata["legacy_preprint_eq35_is_correctness_oracle"] is False
     assert metadata["eq35_literal_equivalence"] is False
-    assert metadata["eq35_literal_status"] == "fail-closed"
-    assert "one-dimensional counterexample" in metadata["eq35_literal_reason"]
+    assert metadata["eq35_literal_status"] == (
+        "legacy-preprint-version-difference"
+    )
+    assert "version-of-record Eq. 36" in metadata["eq35_literal_reason"]
     assert metadata["requires_rr_back_projection"] is True
     assert metadata["complete_ccsd_residual"] is False
     assert metadata["audit_only"] is True
@@ -367,7 +422,7 @@ def test_algorithm7_float32_preserves_dtype_and_matches_dense_oracles():
     projector = _pair_projector(y_occ, y_vir)
     t2 = _dense_amplitudes(y_occ, y_vir, amplitude_core)
     ovov = _dense_ovov(eri)
-    r_dense = _dense_eq36(projector, t2)
+    r_dense = _dense_eq37_intermediate(projector, t2)
     s_dense = _dense_s_exchange(projector, t2)
     result = thc_omega_d_algorithm7(y_occ, y_vir, amplitude_core, eri)
 
@@ -376,8 +431,8 @@ def test_algorithm7_float32_preserves_dtype_and_matches_dense_oracles():
         result.r_intermediate, r_dense, atol=3e-4, rtol=4e-5
     )
     np.testing.assert_allclose(
-        result.main_eq37,
-        _dense_eq37(r_dense, ovov),
+        result.main_eq38,
+        _dense_eq38(r_dense, ovov),
         atol=5e-3,
         rtol=6e-5,
     )
@@ -447,7 +502,7 @@ def test_algorithm7_cupy_path_matches_numpy_and_records_scalar_reads():
     for name in (
         "r_intermediate",
         "s_exchange",
-        "main_eq37",
+        "main_eq38",
         "spurious_removal",
         "combined",
     ):

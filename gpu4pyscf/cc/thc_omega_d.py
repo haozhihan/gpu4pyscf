@@ -12,19 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Audit-only THC ``Omega-D`` contraction from paper Algorithm 7.
+"""Audit-only THC ``Omega-D`` contraction from published Algorithm 7.
 
-This module follows Eqs. 36--37 and Appendix Algorithm 7 of Hohenstein
-*et al.*, J. Chem. Phys. **156**, 054102 (2022), DOI 10.1063/5.0077770
-(arXiv:2111.11473v1).  It returns the Eq. 37 main contribution, the signed
-spurious-term removal in Algorithm 7 line 22, and their sum separately.
+This module follows Eqs. 37--38 and Appendix Algorithm 7 of the version of
+record of Hohenstein *et al.*, J. Chem. Phys. **156**, 054102 (2022),
+DOI 10.1063/5.0077770.  It returns the Eq. 38 main contribution, the signed
+spurious-term removal in Algorithm 7 line 19, and their sum separately.
 
-The literal printed Eq. 35 is not claimed by this endpoint.  Direct expansion
-of that equation does not equal Algorithm 7 line 22 for unconstrained random
-factors, including a one-dimensional counterexample.  Until the missing
-convention is established independently, callers that require literal Eq. 35
-are rejected.  This fail-closed boundary prevents an audit result from being
-used as a production ``Omega-D`` replacement.
+The version-of-record Eq. 36 contains ``(2 t_jl^bd - t_jl^db)`` and is
+algebraically equivalent to that sum in the physical full-pair gauge.  The
+submitted arXiv:2111.11473v1 Eq. 35 instead printed
+``(t_jl^bd - t_jl^db)``.  That historical formula is retained as an explicit
+legacy diagnostic in :mod:`gpu4pyscf.cc.thc_omega_cd_audit`; it is never used
+as the correctness oracle here.  This endpoint still remains audit-only and
+is not a production ``Omega-D`` replacement.
 """
 
 from __future__ import annotations
@@ -190,7 +191,7 @@ class THCOmegaDAlgorithm7Result:
 
     r_intermediate: Any
     s_exchange: Any
-    main_eq37: Any
+    main_eq38: Any
     spurious_removal: Any
     combined: Any
     x_block_size: int
@@ -199,33 +200,65 @@ class THCOmegaDAlgorithm7Result:
 
     @property
     def sigma_thc(self):
-        """Return the signed Algorithm 7 line-22 sum."""
+        """Return the signed published Algorithm 7 line-19 sum."""
 
         return self.combined
+
+    @property
+    def main_eq37(self):
+        """Compatibility alias for the submitted-preprint equation number.
+
+        The same expression is Eq. 38 in the version of record.  New code
+        should use :attr:`main_eq38`.
+        """
+
+        return self.main_eq38
 
     def metadata(self) -> dict[str, Any]:
         xp = _array_module(self.combined)
         return {
             "paper": "Hohenstein-2022",
-            "paper_source": "arXiv:2111.11473v1",
+            "paper_source": (
+                "J. Chem. Phys. 156, 054102 (2022), "
+                "DOI:10.1063/5.0077770"
+            ),
+            "paper_source_version": "version-of-record",
             "paper_algorithm": 7,
-            "paper_equations_referenced": [35, 36, 37],
-            "implemented_equations": [36, 37],
-            "unimplemented_equations": [35],
-            "eq35_scope": "referenced_but_not_literal_equivalent",
+            "paper_equations_referenced": [36, 37, 38],
+            "implemented_equations": [37, 38],
+            "dense_audit_equations": [36],
+            "published_eq36_scope": (
+                "literal-equivalence-verified-in-full-pair-gauge"
+            ),
+            "published_eq36_literal_equivalence_in_full_pair_gauge": True,
+            "published_eq36_literal_equivalence_unconditional": False,
+            "published_eq36_equivalence_requires_full_pair_gauge": True,
             "coordinate_space": "amplitude-thc-auxiliary",
-            "main_convention": "equation-37",
+            "main_convention": "version-of-record-equation-38",
             "spurious_removal_convention": (
                 "signed-plus-one-quarter-tildeG-X-dot-S-Y"
             ),
             "spurious_removal_is_signed_addend": True,
-            "combined_convention": "appendix-algorithm-7-line-22",
+            "combined_convention": (
+                "version-of-record-appendix-algorithm-7-line-19"
+            ),
+            "legacy_preprint_source": "arXiv:2111.11473v1",
+            "legacy_preprint_equation": 35,
+            "legacy_preprint_eq35_second_amplitude_factor": (
+                "t_jl^bd-t_jl^db"
+            ),
+            "legacy_preprint_eq35_is_correctness_oracle": False,
+            "legacy_preprint_eq35_literal_equivalence": False,
+            "legacy_preprint_eq35_status": "known-version-difference",
+            # Backward-compatible keys are explicitly scoped to the legacy
+            # submitted preprint; they must not be mistaken for Eq. 36 of the
+            # version of record.
             "eq35_literal_equivalence": False,
-            "eq35_literal_status": "fail-closed",
+            "eq35_literal_status": "legacy-preprint-version-difference",
             "eq35_literal_reason": (
-                "printed Eq. 35 and Algorithm 7 line 22 differ for an "
-                "unconstrained one-dimensional counterexample; the missing "
-                "diagram/convention boundary has not been established"
+                "arXiv:2111.11473v1 Eq. 35 omits the direct coefficient in "
+                "the second amplitude factor; the version-of-record Eq. 36 "
+                "prints 2*t_jl^bd-t_jl^db"
             ),
             "requires_rr_back_projection": True,
             "complete_ccsd_residual": False,
@@ -267,17 +300,16 @@ def thc_omega_d_algorithm7(
     transfer_counter: Any = None,
     require_eq35_literal_equivalence: bool = False,
 ) -> THCOmegaDAlgorithm7Result:
-    """Evaluate Appendix Algorithm 7 without claiming literal Eq. 35.
+    """Evaluate Appendix Algorithm 7 using version-of-record numbering.
 
-    ``main_eq37`` evaluates Eq. 37 using the Eq. 36 intermediate.
-    ``spurious_removal`` is the signed final addend of Algorithm 7 line 22,
+    ``main_eq38`` evaluates Eq. 38 using the Eq. 37 intermediate.
+    ``spurious_removal`` is the signed final addend of Algorithm 7 line 19,
     and ``combined`` is their sum.  Dense doubles and four-index ERIs are not
     materialized.
 
-    Set ``require_eq35_literal_equivalence=True`` only to request the stronger
-    printed-Eq.-35 contract.  That request is rejected because the paper does
-    not uniquely establish the convention needed to reconcile Eq. 35 with
-    Algorithm 7 for general factors.
+    ``require_eq35_literal_equivalence`` is a compatibility switch referring
+    only to the erroneous submitted-preprint Eq. 35.  It remains rejected so
+    the historical expression cannot silently replace published Eq. 36.
     """
 
     require_eq35_literal_equivalence = _boolean(
@@ -286,8 +318,9 @@ def thc_omega_d_algorithm7(
     )
     if require_eq35_literal_equivalence:
         raise NotImplementedError(
-            "literal Eq. 35 equivalence is unresolved; Algorithm 7 remains "
-            "an audit-only, fail-closed endpoint"
+            "arXiv:2111.11473v1 literal Eq. 35 is a legacy version "
+            "difference and is not equivalent to published Algorithm 7; "
+            "use the version-of-record Eq. 36 audit"
         )
     x_block_size = _positive_block_size(x_block_size)
     if not isinstance(eri_factors, ERITHCFactors):
@@ -329,7 +362,7 @@ def thc_omega_d_algorithm7(
         int(s_xia.nbytes),
     )
 
-    # Lines 4--8.  S is retained separately because line 22 reuses only its
+    # Lines 4--8.  S is retained separately because line 19 reuses only its
     # exchange component for the explicit spurious-term removal.
     for x0 in range(0, rank, x_block_size):
         x1 = min(x0 + x_block_size, rank)
@@ -351,8 +384,8 @@ def thc_omega_d_algorithm7(
                 largest_intermediate_nbytes, int(b_yz.nbytes)
             )
 
-    # Eq. 36 is now represented by R.  Lines 9--10 provide the Coulomb-like
-    # half of Eq. 37.  D[X,I] = sum(J) C[X,J] Z[I,J].
+    # Published Eq. 37 is now represented by R.  Lines 9--10 provide the
+    # Coulomb-like half of Eq. 38.  D[X,I] = sum(J) C[X,J] Z[I,J].
     r_flat = r_xia.reshape(rank, nocc * nvir)
     s_flat = s_xia.reshape(rank, nocc * nvir)
     c_xi = r_flat @ pair_x
@@ -369,7 +402,7 @@ def thc_omega_d_algorithm7(
         int(removal.nbytes),
     )
 
-    # Lines 12--21, blocked over the output X coordinate.  F[I,J] uses
+    # Lines 11--18, blocked over the output X coordinate.  F[I,J] uses
     # Z[I,J] as printed; G then contracts x_occ[:,J] and x_vir[:,I].
     for x0 in range(0, rank, x_block_size):
         x1 = min(x0 + x_block_size, rank)
@@ -405,9 +438,9 @@ def thc_omega_d_algorithm7(
         )
 
     quarter = dtype.type(0.25)
-    main_eq37 = quarter * (coulomb - exchange)
+    main_eq38 = quarter * (coulomb - exchange)
     spurious_removal = quarter * removal
-    combined = main_eq37 + spurious_removal
+    combined = main_eq38 + spurious_removal
     _require_finite(
         xp,
         transfer_counter=transfer_counter,
@@ -415,14 +448,14 @@ def thc_omega_d_algorithm7(
         error_type=FloatingPointError,
         r_intermediate=r_xia,
         s_exchange=s_xia,
-        main_eq37=main_eq37,
+        main_eq38=main_eq38,
         spurious_removal=spurious_removal,
         combined=combined,
     )
     return THCOmegaDAlgorithm7Result(
         r_intermediate=r_xia,
         s_exchange=s_xia,
-        main_eq37=main_eq37,
+        main_eq38=main_eq38,
         spurious_removal=spurious_removal,
         combined=combined,
         x_block_size=x_block_size,

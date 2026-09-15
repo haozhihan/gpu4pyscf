@@ -70,22 +70,39 @@ def _dense_references(y_occ, y_vir, amplitude_core, eri):
 
     two_t_minus_virtual_swap = 2 * t2 - t2.swapaxes(2, 3)
     two_eri_minus_exchange = 2 * ovov - ovov.transpose(0, 3, 2, 1)
-    virtual_antisymmetric_t = t2 - t2.swapaxes(2, 3)
-    eq35_residual = np.einsum(
+    eq36_residual = np.einsum(
         "ikac,kcld,jlbd->ijab",
         two_t_minus_virtual_swap,
         two_eri_minus_exchange,
-        virtual_antisymmetric_t,
+        two_t_minus_virtual_swap,
         optimize=True,
     )
-    eq35_residual += np.einsum(
+    eq36_residual += np.einsum(
         "ikca,kdlc,jldb->ijab", t2, ovov, t2, optimize=True
     )
-    eq35 = 0.25 * np.einsum(
+    eq36 = 0.25 * np.einsum(
         "Xia,Yjb,ijab->XY",
         projector,
         projector,
-        eq35_residual,
+        eq36_residual,
+        optimize=True,
+    )
+
+    legacy_eq35_residual = np.einsum(
+        "ikac,kcld,jlbd->ijab",
+        two_t_minus_virtual_swap,
+        two_eri_minus_exchange,
+        t2 - t2.swapaxes(2, 3),
+        optimize=True,
+    )
+    legacy_eq35_residual += np.einsum(
+        "ikca,kdlc,jldb->ijab", t2, ovov, t2, optimize=True
+    )
+    legacy_eq35 = 0.25 * np.einsum(
+        "Xia,Yjb,ijab->XY",
+        projector,
+        projector,
+        legacy_eq35_residual,
         optimize=True,
     )
 
@@ -101,14 +118,14 @@ def _dense_references(y_occ, y_vir, amplitude_core, eri):
         t2.swapaxes(2, 3),
         optimize=True,
     )
-    eq37 = 0.25 * np.einsum(
+    eq38 = 0.25 * np.einsum(
         "Xia,Yjb,iajb->XY",
         r_intermediate,
         r_intermediate,
         two_eri_minus_exchange,
         optimize=True,
     )
-    line22 = 0.25 * np.einsum(
+    line19 = 0.25 * np.einsum(
         "Xia,Yjb,iajb->XY",
         s_exchange,
         s_exchange,
@@ -120,9 +137,10 @@ def _dense_references(y_occ, y_vir, amplitude_core, eri):
         "t2": t2,
         "ovov": ovov,
         "eq33": eq33,
-        "eq35": eq35,
-        "eq37": eq37,
-        "line22": line22,
+        "eq36": eq36,
+        "legacy_eq35": legacy_eq35,
+        "eq38": eq38,
+        "line19": line19,
     }
 
 
@@ -131,22 +149,48 @@ def _assert_result_matches_dense(result, dense):
         result.omega_c_eq33, dense["eq33"], atol=2e-10, rtol=2e-12
     )
     np.testing.assert_allclose(
-        result.omega_d_eq35_literal,
-        dense["eq35"],
+        result.omega_d_eq36_literal,
+        dense["eq36"],
         atol=2e-10,
         rtol=2e-12,
     )
     np.testing.assert_allclose(
-        result.omega_d_eq37, dense["eq37"], atol=2e-10, rtol=2e-12
-    )
-    np.testing.assert_allclose(
-        result.algorithm7_line22_correction,
-        dense["line22"],
+        result.legacy_preprint_eq35_literal,
+        dense["legacy_eq35"],
         atol=2e-10,
         rtol=2e-12,
     )
-    expected_algorithm = dense["eq33"] + dense["eq37"] + dense["line22"]
-    expected_literal = dense["eq33"] + dense["eq35"]
+    np.testing.assert_allclose(
+        result.omega_d_eq38, dense["eq38"], atol=2e-10, rtol=2e-12
+    )
+    np.testing.assert_allclose(
+        result.algorithm7_line19_correction,
+        dense["line19"],
+        atol=2e-10,
+        rtol=2e-12,
+    )
+    expected_published_algorithm = dense["eq38"] + dense["line19"]
+    expected_published_literal = dense["eq36"]
+    expected_algorithm = dense["eq33"] + expected_published_algorithm
+    expected_literal = dense["eq33"] + expected_published_literal
+    np.testing.assert_allclose(
+        result.published_algorithm,
+        expected_published_algorithm,
+        atol=4e-10,
+        rtol=3e-12,
+    )
+    np.testing.assert_allclose(
+        result.published_literal,
+        expected_published_literal,
+        atol=4e-10,
+        rtol=3e-12,
+    )
+    np.testing.assert_allclose(
+        result.published_difference,
+        expected_published_algorithm - expected_published_literal,
+        atol=4e-10,
+        rtol=3e-12,
+    )
     np.testing.assert_allclose(
         result.joint_algorithm,
         expected_algorithm,
@@ -159,6 +203,19 @@ def _assert_result_matches_dense(result, dense):
     np.testing.assert_allclose(
         result.joint_difference,
         expected_algorithm - expected_literal,
+        atol=4e-10,
+        rtol=3e-12,
+    )
+    expected_legacy_literal = dense["eq33"] + dense["legacy_eq35"]
+    np.testing.assert_allclose(
+        result.legacy_joint_literal,
+        expected_legacy_literal,
+        atol=4e-10,
+        rtol=3e-12,
+    )
+    np.testing.assert_allclose(
+        result.legacy_joint_difference,
+        expected_algorithm - expected_legacy_literal,
         atol=4e-10,
         rtol=3e-12,
     )
@@ -205,7 +262,8 @@ def _brute_force_references(y_occ, y_vir, amplitude_core, eri):
                             )
 
     eq33 = np.zeros((amplitude_rank, amplitude_rank))
-    eq35 = np.zeros_like(eq33)
+    eq36 = np.zeros_like(eq33)
+    legacy_eq35 = np.zeros_like(eq33)
     r_intermediate = np.zeros((amplitude_rank, nocc, nvir))
     s_exchange = np.zeros_like(r_intermediate)
     for x in range(amplitude_rank):
@@ -237,7 +295,25 @@ def _brute_force_references(y_occ, y_vir, amplitude_core, eri):
                                                 * t2[l, j, a, d]
                                                 * ovov[l, c, k, d]
                                             )
-                                            eq35[x, y] += 0.25 * projection * (
+                                            first = (
+                                                (
+                                                    2 * t2[i, k, a, c]
+                                                    - t2[i, k, c, a]
+                                                )
+                                                * (
+                                                    2 * ovov[k, c, l, d]
+                                                    - ovov[k, d, l, c]
+                                                )
+                                                * (
+                                                    2 * t2[j, l, b, d]
+                                                    - t2[j, l, d, b]
+                                                )
+                                                + t2[i, k, c, a]
+                                                * ovov[k, d, l, c]
+                                                * t2[j, l, d, b]
+                                            )
+                                            eq36[x, y] += 0.25 * projection * first
+                                            legacy_first = (
                                                 (
                                                     2 * t2[i, k, a, c]
                                                     - t2[i, k, c, a]
@@ -254,16 +330,19 @@ def _brute_force_references(y_occ, y_vir, amplitude_core, eri):
                                                 * ovov[k, d, l, c]
                                                 * t2[j, l, d, b]
                                             )
+                                            legacy_eq35[x, y] += (
+                                                0.25 * projection * legacy_first
+                                            )
 
-    eq37 = np.zeros_like(eq33)
-    line22 = np.zeros_like(eq33)
+    eq38 = np.zeros_like(eq33)
+    line19 = np.zeros_like(eq33)
     for x in range(amplitude_rank):
         for y in range(amplitude_rank):
             for i in range(nocc):
                 for j in range(nocc):
                     for a in range(nvir):
                         for b in range(nvir):
-                            eq37[x, y] += 0.25 * (
+                            eq38[x, y] += 0.25 * (
                                 r_intermediate[x, i, a]
                                 * r_intermediate[y, j, b]
                                 * (
@@ -271,7 +350,7 @@ def _brute_force_references(y_occ, y_vir, amplitude_core, eri):
                                     - ovov[i, b, j, a]
                                 )
                             )
-                            line22[x, y] += 0.25 * (
+                            line19[x, y] += 0.25 * (
                                 s_exchange[x, i, a]
                                 * s_exchange[y, j, b]
                                 * ovov[i, b, j, a]
@@ -280,20 +359,28 @@ def _brute_force_references(y_occ, y_vir, amplitude_core, eri):
         "t2": t2,
         "ovov": ovov,
         "eq33": eq33,
-        "eq35": eq35,
-        "eq37": eq37,
-        "line22": line22,
+        "eq36": eq36,
+        "legacy_eq35": legacy_eq35,
+        "eq38": eq38,
+        "line19": line19,
     }
 
 
 def test_all_equations_match_independent_scalar_loop_oracle():
     args = _problem(
-        815, nocc=2, nvir=2, amplitude_rank=2, eri_rank=2
+        815,
+        nocc=2,
+        nvir=2,
+        amplitude_rank=2,
+        eri_rank=2,
+        pair_symmetric=True,
     )
     brute = _brute_force_references(*args)
     result = thc_omega_cd_joint_audit(*args)
 
     _assert_result_matches_dense(result, brute)
+    assert result.full_pair_gauge is True
+    assert result.published_equivalent is True
 
 
 def test_nonsymmetric_factors_match_each_literal_dense_equation():
@@ -310,7 +397,9 @@ def test_nonsymmetric_factors_match_each_literal_dense_equation():
     assert result.endpoint_consistent is True
     assert result.full_pair_gauge is False
     assert result.equivalence_attempted is False
-    assert result.joint_equivalent is None
+    assert result.published_equivalent is None
+    assert result.legacy_preprint_equivalent is None
+    assert np.max(np.abs(result.published_difference)) > 1e-8
     assert result.symmetry_diagnostics.t2_pair_symmetric is False
     assert result.symmetry_diagnostics.eri_pair_symmetric is False
     assert result.metadata()["joint_equivalence_status"] == (
@@ -318,7 +407,7 @@ def test_nonsymmetric_factors_match_each_literal_dense_equation():
     )
 
 
-def test_one_dimensional_physical_pair_gauge_is_counterexample():
+def test_one_dimensional_published_identity_and_legacy_counterexample():
     one = np.ones((1, 1))
     result = thc_omega_cd_joint_audit(
         one, one.copy(), one.copy(), ERITHCFactors(one, one.copy(), one.copy())
@@ -326,25 +415,32 @@ def test_one_dimensional_physical_pair_gauge_is_counterexample():
 
     assert result.full_pair_gauge is True
     assert result.equivalence_attempted is True
-    assert result.joint_equivalent is False
+    assert result.published_equivalent is True
+    assert result.legacy_preprint_equivalence_attempted is True
+    assert result.legacy_preprint_equivalent is False
     np.testing.assert_allclose(result.omega_c_eq33, [[1.0]])
-    np.testing.assert_allclose(result.omega_d_eq35_literal, [[0.25]])
-    np.testing.assert_allclose(result.omega_d_eq37, [[0.25]])
-    np.testing.assert_allclose(result.algorithm7_line22_correction, [[0.25]])
-    np.testing.assert_allclose(result.joint_difference, [[0.25]])
-    assert result.joint_max_abs_difference > result.joint_equivalence_threshold
-    assert not np.allclose(
-        result.joint_algorithm,
-        result.joint_literal,
-        atol=1e-14,
-        rtol=1e-12,
+    np.testing.assert_allclose(result.omega_d_eq36_literal, [[0.5]])
+    np.testing.assert_allclose(result.legacy_preprint_eq35_literal, [[0.25]])
+    np.testing.assert_allclose(result.omega_d_eq38, [[0.25]])
+    np.testing.assert_allclose(result.algorithm7_line19_correction, [[0.25]])
+    np.testing.assert_allclose(result.published_difference, [[0.0]])
+    np.testing.assert_allclose(result.joint_difference, [[0.0]])
+    np.testing.assert_allclose(result.legacy_joint_difference, [[0.25]])
+    assert result.published_max_abs_difference <= (
+        result.published_equivalence_threshold
+    )
+    assert result.legacy_preprint_max_abs_difference > (
+        result.legacy_preprint_equivalence_threshold
     )
     assert result.metadata()["joint_equivalence_status"] == (
-        "unequal-within-explicit-audit-tolerance"
+        "equal-within-explicit-audit-tolerance"
+    )
+    assert result.metadata()["legacy_preprint_equivalence_status"] == (
+        "unequal-known-version-difference"
     )
 
 
-def test_nontrivial_full_pair_gauge_records_inequality_without_sign_tuning():
+def test_nontrivial_full_pair_gauge_proves_published_identity_without_tuning():
     args = _problem(804, pair_symmetric=True)
     dense = _dense_references(*args)
     np.testing.assert_allclose(
@@ -361,8 +457,14 @@ def test_nontrivial_full_pair_gauge_records_inequality_without_sign_tuning():
     assert result.symmetry_diagnostics.eri_core_symmetric is True
     assert result.full_pair_gauge is True
     assert result.equivalence_attempted is True
-    assert result.joint_equivalent is False
-    assert result.joint_max_abs_difference > result.joint_equivalence_threshold
+    assert result.published_equivalent is True
+    assert result.published_max_abs_difference <= (
+        result.published_equivalence_threshold
+    )
+    assert result.legacy_preprint_equivalent is False
+    assert result.legacy_preprint_max_abs_difference > (
+        result.legacy_preprint_equivalence_threshold
+    )
 
 
 def test_reconstructed_pair_gauge_does_not_require_symmetric_factor_cores():
@@ -385,6 +487,7 @@ def test_reconstructed_pair_gauge_does_not_require_symmetric_factor_cores():
     assert result.symmetry_diagnostics.eri_pair_symmetric is True
     assert result.full_pair_gauge is True
     assert result.equivalence_attempted is True
+    assert result.published_equivalent is True
 
 
 def test_zero_problem_is_a_trivial_equal_endpoint():
@@ -395,18 +498,25 @@ def test_zero_problem_is_a_trivial_equal_endpoint():
 
     for name in (
         "omega_c_eq33",
-        "omega_d_eq35_literal",
-        "omega_d_eq37",
-        "algorithm7_line22_correction",
+        "omega_d_eq36_literal",
+        "legacy_preprint_eq35_literal",
+        "omega_d_eq38",
+        "algorithm7_line19_correction",
+        "published_algorithm",
+        "published_literal",
+        "published_difference",
         "joint_algorithm",
         "joint_literal",
         "joint_difference",
+        "legacy_joint_literal",
+        "legacy_joint_difference",
     ):
         np.testing.assert_array_equal(getattr(result, name), 0)
     assert result.full_pair_gauge is True
     assert result.equivalence_attempted is True
-    assert result.joint_equivalent is True
-    assert result.joint_max_abs_difference == 0.0
+    assert result.published_equivalent is True
+    assert result.published_max_abs_difference == 0.0
+    assert result.legacy_preprint_equivalent is True
 
 
 def test_rank_one_factors_match_dense_and_remain_a_diagnostic():
@@ -424,7 +534,8 @@ def test_rank_one_factors_match_dense_and_remain_a_diagnostic():
     _assert_result_matches_dense(result, dense)
     assert result.full_pair_gauge is True
     assert result.equivalence_attempted is True
-    assert result.joint_equivalent is False
+    assert result.published_equivalent is True
+    assert result.legacy_preprint_equivalent is False
     assert result.omega_c_eq33.shape == (1, 1)
 
 
@@ -456,12 +567,18 @@ def test_algorithm_block_sizes_do_not_change_joint_audit():
         )
         for name in (
             "omega_c_eq33",
-            "omega_d_eq35_literal",
-            "omega_d_eq37",
-            "algorithm7_line22_correction",
+            "omega_d_eq36_literal",
+            "legacy_preprint_eq35_literal",
+            "omega_d_eq38",
+            "algorithm7_line19_correction",
+            "published_algorithm",
+            "published_literal",
+            "published_difference",
             "joint_algorithm",
             "joint_literal",
             "joint_difference",
+            "legacy_joint_literal",
+            "legacy_joint_difference",
         ):
             np.testing.assert_allclose(
                 getattr(observed, name),
@@ -489,31 +606,42 @@ def test_endpoint_mismatch_disables_joint_equivalence(monkeypatch):
     assert result.full_pair_gauge is True
     assert result.endpoint_consistent is False
     assert result.equivalence_attempted is False
-    assert result.joint_equivalent is None
+    assert result.published_equivalent is None
     assert result.endpoint_max_abs_difference == pytest.approx(1.0)
     assert result.metadata()["joint_equivalence_status"] == (
         "not-attempted-endpoint-mismatch"
     )
 
 
-def test_metadata_is_json_safe_and_explicitly_fail_closed():
+def test_metadata_records_published_gate_and_keeps_later_gates_closed():
     result = thc_omega_cd_joint_audit(*_problem(810, pair_symmetric=True))
     metadata = result.metadata()
 
     assert json.loads(json.dumps(metadata)) == metadata
-    assert metadata["paper_equations"] == [33, 35, 36, 37]
+    assert metadata["paper_source_version"] == "version-of-record"
+    assert metadata["paper_equations"] == [33, 36, 37, 38]
     assert metadata["paper_algorithms"] == [5, 7]
-    assert metadata["joint_algorithm_definition"] == (
-        "eq33+eq37+algorithm7-line22"
+    assert metadata["published_algorithm_definition"] == (
+        "eq38+algorithm7-line19"
     )
-    assert metadata["joint_literal_definition"] == "eq33+literal-eq35"
+    assert metadata["published_literal_definition"] == "literal-eq36"
+    assert metadata["joint_algorithm_definition"] == (
+        "eq33+eq38+algorithm7-line19"
+    )
+    assert metadata["joint_literal_definition"] == "eq33+literal-eq36"
     assert metadata["joint_difference_definition"] == (
         "joint_algorithm-joint_literal"
     )
-    assert metadata["line22_correction_sign"] == "as-printed-positive-addend"
-    assert metadata["line22_eq35_term_mapping"] == "unresolved-by-paper"
-    assert metadata["difference_is_diagnostic"] is True
-    assert metadata["literal_eq35_is_production_oracle"] is False
+    assert metadata["line19_correction_sign"] == "as-printed-positive-addend"
+    assert metadata["line19_eq36_term_mapping"] == (
+        "verified-in-physical-full-pair-gauge"
+    )
+    assert metadata["published_eq36_literal_is_algebra_oracle"] is True
+    assert metadata["published_eq36_algebra_gate_passed"] is True
+    assert metadata["legacy_preprint_source"] == "arXiv:2111.11473v1"
+    assert metadata["legacy_preprint_equation"] == 35
+    assert metadata["legacy_preprint_eq35_is_correctness_oracle"] is False
+    assert metadata["legacy_preprint_equivalent"] is False
     assert metadata["materializes_dense_t2"] is True
     assert metadata["materializes_four_index_eri"] is True
     assert metadata["small_problem_only"] is True
@@ -523,6 +651,10 @@ def test_metadata_is_json_safe_and_explicitly_fail_closed():
     assert metadata["production_enabled"] is False
     assert metadata["performance_eligible"] is False
     assert metadata["complete_ccsd_residual"] is False
+    assert metadata["inexact_ccsd_validated"] is False
+    assert metadata["water2_validated"] is False
+    assert metadata["water4_validated"] is False
+    assert metadata["performance_validated"] is False
 
 
 class _ImplicitHostTransferTrap:

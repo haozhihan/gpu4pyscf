@@ -12,28 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Dense, audit-only joint ``Omega-C``/``Omega-D`` oracle.
+"""Dense audit of the published ``Omega-D`` identity and its history.
 
-The printed equations and appendix algorithms in Hohenstein *et al.*,
-J. Chem. Phys. **156**, 054102 (2022), DOI 10.1063/5.0077770
-(arXiv:2111.11473v1), leave an important implementation boundary.  The text
-states that Appendix Algorithm 7 removes a spurious contribution that is
-normally cancelled while evaluating ``Omega-C``, but does not identify a
-unique term-by-term equality between printed Eq. 35 and Algorithm 7 line 22.
+The version of record of Hohenstein *et al.*, J. Chem. Phys. **156**, 054102
+(2022), DOI 10.1063/5.0077770, corrects the second amplitude factor in
+Eq. 36 to ``(2 t_jl^bd - t_jl^db)``.  In the physical full-pair gauge, that
+literal equation equals published Eq. 38 plus Appendix Algorithm 7 line 19.
 
-This module keeps the two conventions separate.  For deliberately small
-NumPy problems it reconstructs dense doubles amplitudes and ``ovov`` ERIs,
-evaluates literal Eq. 35, and compares the following joint quantities::
+The submitted arXiv:2111.11473v1 Eq. 35 printed
+``(t_jl^bd - t_jl^db)`` instead.  This module retains that expression under an
+explicit ``legacy_preprint`` name as a regression diagnostic; it is not the
+correctness oracle.  For deliberately small NumPy problems the audit
+reconstructs dense doubles amplitudes and ``ovov`` ERIs and compares::
 
-    joint_algorithm = Eq. 33 + Eq. 37 + Algorithm-7 line 22
-    joint_literal   = Eq. 33 + literal Eq. 35
+    published_algorithm = Eq. 38 + Algorithm-7 line 19
+    published_literal   = literal version-of-record Eq. 36
 
-No sign is adjusted to make that comparison pass.  Equality is attempted
-only when the reconstructed real-RHF tensors obey the physical pair
-symmetries ``t[i,j,a,b] = t[j,i,b,a]`` and
-``(i a | j b) = (j b | i a)``.  Even a successful audit remains ineligible
-for production use: this endpoint explicitly materializes fourth-order
-tensors and does not establish the missing paper convention.
+The existing joint ``Omega-C`` plus ``Omega-D`` values are also retained for
+compatibility, with Eq. 33 added identically to both sides.  No sign,
+coefficient, or permutation is fitted.  Equality is attempted only when the
+reconstructed real-RHF tensors obey ``t[i,j,a,b] = t[j,i,b,a]`` and
+``(i a | j b) = (j b | i a)``.  A successful algebra audit does not validate
+the complete or inexact CCSD residual and does not enable production use.
 """
 
 from __future__ import annotations
@@ -231,26 +231,25 @@ def _dense_eq33(
     return _project_dense(projector, residual)
 
 
-def _dense_literal_eq35(
+def _dense_published_eq36(
     projector: np.ndarray,
     t2: np.ndarray,
     ovov: np.ndarray,
 ) -> np.ndarray:
-    # Printed Eq. 35, first product:
+    # Version-of-record Eq. 36, first product:
     # (2 t_ik^ac - t_ik^ca) [2(kc|ld) - (kd|lc)]
-    #                         (t_jl^bd - t_jl^db).
+    #                         (2 t_jl^bd - t_jl^db).
     two_t_minus_virtual_swap = 2 * t2 - t2.swapaxes(2, 3)
     two_eri_minus_exchange = 2 * ovov - ovov.transpose(0, 3, 2, 1)
-    virtual_antisymmetric_t = t2 - t2.swapaxes(2, 3)
     residual = np.einsum(
         "ikac,kcld,jlbd->ijab",
         two_t_minus_virtual_swap,
         two_eri_minus_exchange,
-        virtual_antisymmetric_t,
+        two_t_minus_virtual_swap,
         optimize=True,
     )
 
-    # Printed Eq. 35, final product:
+    # Version-of-record Eq. 36, final product:
     # + t_ik^ca (kd|lc) t_jl^db.
     residual += np.einsum(
         "ikca,kdlc,jldb->ijab", t2, ovov, t2, optimize=True
@@ -260,7 +259,32 @@ def _dense_literal_eq35(
     )
 
 
-def _dense_eq36(
+def _dense_legacy_preprint_eq35(
+    projector: np.ndarray,
+    t2: np.ndarray,
+    ovov: np.ndarray,
+) -> np.ndarray:
+    """Return the submitted arXiv v1 expression with its missing factor 2."""
+
+    two_t_minus_virtual_swap = 2 * t2 - t2.swapaxes(2, 3)
+    two_eri_minus_exchange = 2 * ovov - ovov.transpose(0, 3, 2, 1)
+    legacy_third_factor = t2 - t2.swapaxes(2, 3)
+    residual = np.einsum(
+        "ikac,kcld,jlbd->ijab",
+        two_t_minus_virtual_swap,
+        two_eri_minus_exchange,
+        legacy_third_factor,
+        optimize=True,
+    )
+    residual += np.einsum(
+        "ikca,kdlc,jldb->ijab", t2, ovov, t2, optimize=True
+    )
+    return np.dtype(t2.dtype).type(0.25) * _project_dense(
+        projector, residual
+    )
+
+
+def _dense_eq37(
     projector: np.ndarray, t2: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
     virtual_swap = t2.swapaxes(2, 3)
@@ -276,7 +300,7 @@ def _dense_eq36(
     return r_intermediate, s_exchange
 
 
-def _dense_eq37(
+def _dense_eq38(
     r_intermediate: np.ndarray, ovov: np.ndarray
 ) -> np.ndarray:
     two_eri_minus_exchange = 2 * ovov - ovov.transpose(0, 3, 2, 1)
@@ -289,7 +313,7 @@ def _dense_eq37(
     )
 
 
-def _dense_algorithm7_line22(
+def _dense_algorithm7_line19(
     s_exchange: np.ndarray, ovov: np.ndarray
 ) -> np.ndarray:
     exchange_ovov = ovov.transpose(0, 3, 2, 1)
@@ -354,26 +378,37 @@ class THCOmegaCDSymmetryDiagnostics:
 
 @dataclass(frozen=True)
 class THCOmegaCDJointAuditResult:
-    """Separated dense-oracle and appendix-algorithm joint audit result."""
+    """Published dense-oracle result plus explicit preprint diagnostic."""
 
     omega_c_eq33: np.ndarray
-    omega_d_eq35_literal: np.ndarray
-    omega_d_eq37: np.ndarray
-    algorithm7_line22_correction: np.ndarray
+    omega_d_eq36_literal: np.ndarray
+    legacy_preprint_eq35_literal: np.ndarray
+    omega_d_eq38: np.ndarray
+    algorithm7_line19_correction: np.ndarray
+    published_algorithm: np.ndarray
+    published_literal: np.ndarray
+    published_difference: np.ndarray
     joint_algorithm: np.ndarray
     joint_literal: np.ndarray
     joint_difference: np.ndarray
+    legacy_joint_literal: np.ndarray
+    legacy_joint_difference: np.ndarray
     omega_c_eq33_dense_reference: np.ndarray
-    omega_d_eq37_dense_reference: np.ndarray
-    algorithm7_line22_dense_reference: np.ndarray
+    omega_d_eq38_dense_reference: np.ndarray
+    algorithm7_line19_dense_reference: np.ndarray
     symmetry_diagnostics: THCOmegaCDSymmetryDiagnostics
     endpoint_consistent: bool
     equivalence_attempted: bool
-    joint_equivalent: bool | None
+    published_equivalent: bool | None
+    legacy_preprint_equivalence_attempted: bool
+    legacy_preprint_equivalent: bool | None
     endpoint_max_abs_difference: float
-    joint_max_abs_difference: float
-    joint_scale: float
-    joint_equivalence_threshold: float
+    published_max_abs_difference: float
+    published_scale: float
+    published_equivalence_threshold: float
+    legacy_preprint_max_abs_difference: float
+    legacy_preprint_scale: float
+    legacy_preprint_equivalence_threshold: float
     algorithm5_outer_block_size: int
     algorithm7_x_block_size: int
     estimated_dense_working_bytes: int
@@ -387,48 +422,137 @@ class THCOmegaCDJointAuditResult:
 
     @property
     def algorithm7_combined(self) -> np.ndarray:
-        return self.omega_d_eq37 + self.algorithm7_line22_correction
+        return self.omega_d_eq38 + self.algorithm7_line19_correction
+
+    @property
+    def joint_equivalent(self) -> bool | None:
+        """Compatibility alias for the published-equation result."""
+
+        return self.published_equivalent
+
+    @property
+    def joint_max_abs_difference(self) -> float:
+        return self.published_max_abs_difference
+
+    @property
+    def joint_scale(self) -> float:
+        return self.published_scale
+
+    @property
+    def joint_equivalence_threshold(self) -> float:
+        return self.published_equivalence_threshold
+
+    @property
+    def omega_d_eq35_literal(self) -> np.ndarray:
+        """Legacy arXiv v1 Eq. 35; never the published oracle."""
+
+        return self.legacy_preprint_eq35_literal
+
+    @property
+    def omega_d_eq37(self) -> np.ndarray:
+        """Compatibility alias; this expression is published Eq. 38."""
+
+        return self.omega_d_eq38
+
+    @property
+    def algorithm7_line22_correction(self) -> np.ndarray:
+        """Compatibility alias; this is line 19 in the version of record."""
+
+        return self.algorithm7_line19_correction
+
+    @property
+    def omega_d_eq37_dense_reference(self) -> np.ndarray:
+        return self.omega_d_eq38_dense_reference
+
+    @property
+    def algorithm7_line22_dense_reference(self) -> np.ndarray:
+        return self.algorithm7_line19_dense_reference
 
     def metadata(self) -> dict[str, Any]:
         if not self.endpoint_consistent:
             equivalence_status = "not-attempted-endpoint-mismatch"
         elif not self.full_pair_gauge:
             equivalence_status = "not-attempted-outside-full-pair-gauge"
-        elif self.joint_equivalent:
+        elif self.published_equivalent:
             equivalence_status = "equal-within-explicit-audit-tolerance"
         else:
             equivalence_status = "unequal-within-explicit-audit-tolerance"
+        if not self.endpoint_consistent:
+            legacy_status = "not-attempted-endpoint-mismatch"
+        elif not self.full_pair_gauge:
+            legacy_status = "not-attempted-outside-full-pair-gauge"
+        elif self.legacy_preprint_equivalent:
+            legacy_status = "accidentally-equal-for-this-input"
+        else:
+            legacy_status = "unequal-known-version-difference"
         return {
             "paper": "Hohenstein-2022",
-            "paper_source": "arXiv:2111.11473v1",
-            "paper_equations": [33, 35, 36, 37],
+            "paper_source": (
+                "J. Chem. Phys. 156, 054102 (2022), "
+                "DOI:10.1063/5.0077770"
+            ),
+            "paper_source_version": "version-of-record",
+            "paper_equations": [33, 36, 37, 38],
             "paper_algorithms": [5, 7],
             "scope": "joint-omega-c-omega-d-dense-audit",
             "omega_c_convention": "printed-equation-33-algorithm-5",
-            "omega_d_literal_convention": "printed-equation-35",
-            "omega_d_algorithm_convention": (
-                "printed-equation-37-plus-appendix-algorithm-7-line-22"
+            "omega_d_literal_convention": (
+                "version-of-record-equation-36"
             ),
-            "joint_algorithm_definition": "eq33+eq37+algorithm7-line22",
-            "joint_literal_definition": "eq33+literal-eq35",
+            "omega_d_algorithm_convention": (
+                "version-of-record-equation-38-plus-appendix-"
+                "algorithm-7-line-19"
+            ),
+            "published_algorithm_definition": "eq38+algorithm7-line19",
+            "published_literal_definition": "literal-eq36",
+            "published_difference_definition": (
+                "published_algorithm-published_literal"
+            ),
+            "joint_algorithm_definition": "eq33+eq38+algorithm7-line19",
+            "joint_literal_definition": "eq33+literal-eq36",
             "joint_difference_definition": "joint_algorithm-joint_literal",
-            "line22_correction_sign": "as-printed-positive-addend",
-            "line22_eq35_term_mapping": "unresolved-by-paper",
-            "difference_is_diagnostic": True,
-            "literal_eq35_is_production_oracle": False,
+            "line19_correction_sign": "as-printed-positive-addend",
+            "line19_eq36_term_mapping": (
+                "verified-in-physical-full-pair-gauge"
+            ),
+            "published_eq36_literal_is_algebra_oracle": True,
+            "published_eq36_algebra_gate_passed": (
+                self.published_equivalent is True
+            ),
+            "published_eq36_equivalence_requires_full_pair_gauge": True,
+            "legacy_preprint_source": "arXiv:2111.11473v1",
+            "legacy_preprint_equation": 35,
+            "legacy_preprint_eq35_second_amplitude_factor": (
+                "t_jl^bd-t_jl^db"
+            ),
+            "legacy_preprint_eq35_is_correctness_oracle": False,
+            "legacy_preprint_difference_is_diagnostic": True,
+            "legacy_preprint_equivalence_attempted": bool(
+                self.legacy_preprint_equivalence_attempted
+            ),
+            "legacy_preprint_equivalent": self.legacy_preprint_equivalent,
+            "legacy_preprint_equivalence_status": legacy_status,
+            "legacy_preprint_max_abs_difference": float(
+                self.legacy_preprint_max_abs_difference
+            ),
+            "legacy_preprint_scale": float(self.legacy_preprint_scale),
+            "legacy_preprint_equivalence_threshold": float(
+                self.legacy_preprint_equivalence_threshold
+            ),
             "endpoint_consistent": bool(self.endpoint_consistent),
             "endpoint_max_abs_difference": float(
                 self.endpoint_max_abs_difference
             ),
             "equivalence_attempted": bool(self.equivalence_attempted),
-            "joint_equivalent": self.joint_equivalent,
+            "published_equivalent": self.published_equivalent,
+            "joint_equivalent": self.published_equivalent,
             "joint_equivalence_status": equivalence_status,
             "joint_max_abs_difference": float(
-                self.joint_max_abs_difference
+                self.published_max_abs_difference
             ),
-            "joint_scale": float(self.joint_scale),
+            "joint_scale": float(self.published_scale),
             "joint_equivalence_threshold": float(
-                self.joint_equivalence_threshold
+                self.published_equivalence_threshold
             ),
             "equivalence_atol": float(self.equivalence_atol),
             "equivalence_rtol": float(self.equivalence_rtol),
@@ -438,7 +562,7 @@ class THCOmegaCDJointAuditResult:
                 "eri[i,a,j,b]=eri[j,b,i,a]",
             ],
             "input_backend": "numpy",
-            "dtype": np.dtype(self.joint_difference.dtype).name,
+            "dtype": np.dtype(self.published_difference.dtype).name,
             "algorithm5_outer_block_size": int(
                 self.algorithm5_outer_block_size
             ),
@@ -456,6 +580,10 @@ class THCOmegaCDJointAuditResult:
             "production_enabled": False,
             "performance_eligible": False,
             "complete_ccsd_residual": False,
+            "inexact_ccsd_validated": False,
+            "water2_validated": False,
+            "water4_validated": False,
+            "performance_validated": False,
             "requires_rr_back_projection": True,
         }
 
@@ -543,14 +671,16 @@ def thc_omega_cd_joint_audit(
     equivalence_rtol: Real | None = None,
     max_dense_working_bytes: int = _DEFAULT_MAX_DENSE_WORKING_BYTES,
 ) -> THCOmegaCDJointAuditResult:
-    """Audit Algorithms 5/7 against literal dense Eqs. 33 and 35--37.
+    """Audit Algorithms 5/7 against published dense Eqs. 33 and 36--38.
 
-    The return value always remains audit-only.  ``joint_equivalent`` is
+    The return value always remains audit-only.  ``published_equivalent`` is
     ``None`` outside the full physical pair gauge or if either reused
     algorithm endpoint fails its independent dense reference.  Inside that
     boundary it is the result of the explicitly recorded scaled-tolerance
-    comparison; inequality is returned as ``False`` rather than hidden by a
-    sign or permutation adjustment.
+    comparison between literal published Eq. 36 and Eq. 38 plus Algorithm 7
+    line 19.  Inequality is returned as ``False`` rather than hidden by a sign
+    or permutation adjustment.  The submitted-preprint Eq. 35 result is
+    returned separately as a legacy diagnostic.
 
     Device arrays are rejected without coercion.  ``max_dense_working_bytes``
     is checked before any fourth-order tensor is allocated so this small-case
@@ -591,7 +721,7 @@ def thc_omega_cd_joint_audit(
     nocc, amplitude_rank = map(int, y_occ.shape)
     nvir = int(y_vir.shape[0])
     tensor_elements = nocc * nocc * nvir * nvir
-    # The dense equations hold t2/ovov plus several Eq. 35 work arrays.  The
+    # The dense equations hold t2/ovov plus several Eq. 36 work arrays.  The
     # factor of ten is deliberately conservative and excludes BLAS scratch,
     # which is why the metadata calls this an estimate rather than a peak.
     estimated_dense_working_bytes = int(
@@ -610,10 +740,13 @@ def thc_omega_cd_joint_audit(
     ovov = _dense_ovov(x_occ, x_vir, eri_core)
 
     omega_c_eq33_dense_reference = _dense_eq33(projector, t2, ovov)
-    omega_d_eq35_literal = _dense_literal_eq35(projector, t2, ovov)
-    r_intermediate, s_exchange = _dense_eq36(projector, t2)
-    omega_d_eq37_dense_reference = _dense_eq37(r_intermediate, ovov)
-    algorithm7_line22_dense_reference = _dense_algorithm7_line22(
+    omega_d_eq36_literal = _dense_published_eq36(projector, t2, ovov)
+    legacy_preprint_eq35_literal = _dense_legacy_preprint_eq35(
+        projector, t2, ovov
+    )
+    r_intermediate, s_exchange = _dense_eq37(projector, t2)
+    omega_d_eq38_dense_reference = _dense_eq38(r_intermediate, ovov)
+    algorithm7_line19_dense_reference = _dense_algorithm7_line19(
         s_exchange, ovov
     )
 
@@ -631,17 +764,17 @@ def thc_omega_cd_joint_audit(
         eri_factors,
         x_block_size=algorithm7_x_block_size,
     )
-    omega_d_eq37 = omega_d_result.main_eq37
-    algorithm7_line22_correction = omega_d_result.spurious_removal
+    omega_d_eq38 = omega_d_result.main_eq38
+    algorithm7_line19_correction = omega_d_result.spurious_removal
 
     endpoint_checks = []
     endpoint_defects = []
     for observed, expected in (
         (omega_c_eq33, omega_c_eq33_dense_reference),
-        (omega_d_eq37, omega_d_eq37_dense_reference),
+        (omega_d_eq38, omega_d_eq38_dense_reference),
         (
-            algorithm7_line22_correction,
-            algorithm7_line22_dense_reference,
+            algorithm7_line19_correction,
+            algorithm7_line19_dense_reference,
         ),
     ):
         check, defect, _, _ = _within_scaled_tolerance(
@@ -656,20 +789,35 @@ def thc_omega_cd_joint_audit(
     endpoint_consistent = all(endpoint_checks)
     endpoint_max_abs_difference = max(endpoint_defects)
 
-    joint_algorithm = (
-        omega_c_eq33 + omega_d_eq37 + algorithm7_line22_correction
-    )
-    joint_literal = omega_c_eq33 + omega_d_eq35_literal
+    published_algorithm = omega_d_eq38 + algorithm7_line19_correction
+    published_literal = omega_d_eq36_literal
+    published_difference = published_algorithm - published_literal
+    joint_algorithm = omega_c_eq33 + published_algorithm
+    joint_literal = omega_c_eq33 + published_literal
     joint_difference = joint_algorithm - joint_literal
+    legacy_joint_literal = omega_c_eq33 + legacy_preprint_eq35_literal
+    legacy_joint_difference = joint_algorithm - legacy_joint_literal
     (
-        joint_equal_within_tolerance,
-        joint_max_abs_difference,
-        joint_scale,
-        joint_equivalence_threshold,
+        published_equal_within_tolerance,
+        published_max_abs_difference,
+        published_scale,
+        published_equivalence_threshold,
     ) = _within_scaled_tolerance(
-        joint_difference,
+        published_difference,
+        published_algorithm,
+        published_literal,
+        atol=equivalence_atol,
+        rtol=equivalence_rtol,
+    )
+    (
+        legacy_preprint_equal_within_tolerance,
+        legacy_preprint_max_abs_difference,
+        legacy_preprint_scale,
+        legacy_preprint_equivalence_threshold,
+    ) = _within_scaled_tolerance(
+        legacy_joint_difference,
         joint_algorithm,
-        joint_literal,
+        legacy_joint_literal,
         atol=equivalence_atol,
         rtol=equivalence_rtol,
     )
@@ -685,46 +833,77 @@ def thc_omega_cd_joint_audit(
     equivalence_attempted = bool(
         endpoint_consistent and symmetry_diagnostics.full_pair_gauge
     )
-    joint_equivalent = (
-        bool(joint_equal_within_tolerance) if equivalence_attempted else None
+    published_equivalent = (
+        bool(published_equal_within_tolerance)
+        if equivalence_attempted
+        else None
+    )
+    legacy_preprint_equivalence_attempted = equivalence_attempted
+    legacy_preprint_equivalent = (
+        bool(legacy_preprint_equal_within_tolerance)
+        if legacy_preprint_equivalence_attempted
+        else None
     )
 
     for name, value in (
         ("omega_c_eq33", omega_c_eq33),
-        ("omega_d_eq35_literal", omega_d_eq35_literal),
-        ("omega_d_eq37", omega_d_eq37),
+        ("omega_d_eq36_literal", omega_d_eq36_literal),
+        ("legacy_preprint_eq35_literal", legacy_preprint_eq35_literal),
+        ("omega_d_eq38", omega_d_eq38),
         (
-            "algorithm7_line22_correction",
-            algorithm7_line22_correction,
+            "algorithm7_line19_correction",
+            algorithm7_line19_correction,
         ),
+        ("published_algorithm", published_algorithm),
+        ("published_literal", published_literal),
+        ("published_difference", published_difference),
         ("joint_algorithm", joint_algorithm),
         ("joint_literal", joint_literal),
         ("joint_difference", joint_difference),
+        ("legacy_joint_literal", legacy_joint_literal),
+        ("legacy_joint_difference", legacy_joint_difference),
     ):
         if not bool(np.all(np.isfinite(value))):
             raise FloatingPointError(f"{name} produced non-finite values")
 
     return THCOmegaCDJointAuditResult(
         omega_c_eq33=omega_c_eq33,
-        omega_d_eq35_literal=omega_d_eq35_literal,
-        omega_d_eq37=omega_d_eq37,
-        algorithm7_line22_correction=algorithm7_line22_correction,
+        omega_d_eq36_literal=omega_d_eq36_literal,
+        legacy_preprint_eq35_literal=legacy_preprint_eq35_literal,
+        omega_d_eq38=omega_d_eq38,
+        algorithm7_line19_correction=algorithm7_line19_correction,
+        published_algorithm=published_algorithm,
+        published_literal=published_literal,
+        published_difference=published_difference,
         joint_algorithm=joint_algorithm,
         joint_literal=joint_literal,
         joint_difference=joint_difference,
+        legacy_joint_literal=legacy_joint_literal,
+        legacy_joint_difference=legacy_joint_difference,
         omega_c_eq33_dense_reference=omega_c_eq33_dense_reference,
-        omega_d_eq37_dense_reference=omega_d_eq37_dense_reference,
-        algorithm7_line22_dense_reference=(
-            algorithm7_line22_dense_reference
+        omega_d_eq38_dense_reference=omega_d_eq38_dense_reference,
+        algorithm7_line19_dense_reference=(
+            algorithm7_line19_dense_reference
         ),
         symmetry_diagnostics=symmetry_diagnostics,
         endpoint_consistent=endpoint_consistent,
         equivalence_attempted=equivalence_attempted,
-        joint_equivalent=joint_equivalent,
+        published_equivalent=published_equivalent,
+        legacy_preprint_equivalence_attempted=(
+            legacy_preprint_equivalence_attempted
+        ),
+        legacy_preprint_equivalent=legacy_preprint_equivalent,
         endpoint_max_abs_difference=endpoint_max_abs_difference,
-        joint_max_abs_difference=joint_max_abs_difference,
-        joint_scale=joint_scale,
-        joint_equivalence_threshold=joint_equivalence_threshold,
+        published_max_abs_difference=published_max_abs_difference,
+        published_scale=published_scale,
+        published_equivalence_threshold=published_equivalence_threshold,
+        legacy_preprint_max_abs_difference=(
+            legacy_preprint_max_abs_difference
+        ),
+        legacy_preprint_scale=legacy_preprint_scale,
+        legacy_preprint_equivalence_threshold=(
+            legacy_preprint_equivalence_threshold
+        ),
         algorithm5_outer_block_size=algorithm5_outer_block_size,
         algorithm7_x_block_size=algorithm7_x_block_size,
         estimated_dense_working_bytes=estimated_dense_working_bytes,

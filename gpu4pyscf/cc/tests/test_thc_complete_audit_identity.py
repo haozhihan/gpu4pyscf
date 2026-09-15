@@ -323,8 +323,11 @@ def test_complete_full_pair_identity_diagnostic(
     assert audit.production_enabled is False
     assert audit.complete_validated is False
     assert metadata["algorithm7_eq35_mapping"] == (
-        "unresolved-by-paper-and-dense-audit"
+        "deprecated-name-mapped-to-version-of-record-eq36"
     )
+    assert metadata["algorithm7_equation_version_contract_asserted"] is True
+    assert metadata["algorithm7_instance_numerical_equivalence_audited"] is False
+    assert metadata["algorithm7_instance_numerical_equivalence"] is None
 
 
 def test_complete_assembly_pair_symmetrizes_a_nonsymmetric_raw_algorithm7(
@@ -373,6 +376,7 @@ def test_complete_assembly_pair_symmetrizes_a_nonsymmetric_raw_algorithm7(
     algorithm7_entry = next(
         entry for entry in result.ledger.entries if entry.algorithm == 7
     )
+    assert algorithm7_entry.equations == (36, 37, 38)
     assert algorithm7_entry.pair_symmetrization == (
         "raw-plus-pair-transpose"
     )
