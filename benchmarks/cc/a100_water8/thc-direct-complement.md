@@ -224,12 +224,14 @@ explicit full-pair endpoint reconstructs the original working-basis `L` and
 dense `t2`, a pair matrix, or a four-index ERI.
 
 Algorithms 8--10 expose Omega-G/H singles, the Omega-E doubles core, and
-Omega-I/J singles separately. Eq. 38 requires the occupied orientation
+Omega-I/J singles separately. Published Eq. 39 requires the occupied orientation
 `Lhat_ji D_ja`, whereas Appendix Algorithm 8 line 13 prints `Lhat_ij D_ja`.
-Both are retained, but only the Eq. 38 result is the current equation-facing
-output. Algorithm 10's formal Eq. 42 equivalence requires a symmetric
-amplitude core; nonsymmetric cores exercise only the literal appendix
-schedule.
+Both are retained, but only the published Eq. 39 result is the current
+equation-facing output. Algorithm 10's formal published Eq. 43 equivalence
+requires a symmetric amplitude core; nonsymmetric cores exercise only the
+literal appendix schedule. The final JCP version of record numbers Algorithm
+8 as Eqs. 39--41, Algorithm 9 as Eqs. 40--42, and Algorithm 10 as Eq. 43; the
+corresponding arXiv-v1 numbers 38--40, 39--41, and 42 remain legacy metadata.
 
 `build_t1_transformed_fhat(...)` (commit `a1adb89`) now provides the separate
 inactive F-hat audit required by Algorithms 8--10. It applies the T1 orbital transforms to
@@ -306,8 +308,10 @@ has passed.
   An independent re-review closed three documentation and gate-semantics issues
   and found no remaining P0--P2 defect. These counts establish local algebra
   behavior only; A100 validation of this commit is still missing.
-- Algorithms 8--10 pass independent dense Eq. 38--42 audits, with the Eq. 38
-  versus Appendix line-13 and symmetric-core boundaries recorded explicitly.
+- Algorithms 8--10 pass independent dense published Eq. 39--43 audits, with
+  the published Eq. 39 versus Appendix line-13 and symmetric-core boundaries
+  recorded explicitly. The arXiv-v1 Eq. 38--42 numbering is retained only as
+  versioned legacy metadata.
 - The provenance-bound T1-transformed inactive F-hat builder passes independent
   dense and provider audits without constructing four-index ERIs or doubles.
 - The Algorithms 1--10 audit assembler enforces the from-zero ledger, XOR

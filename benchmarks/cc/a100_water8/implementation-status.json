@@ -1,6 +1,6 @@
 {
   "schema": "gpu4pyscf.water8.implementation-status.v2",
-  "as_of_utc": "2026-09-15T06:50:43.689037+00:00",
+  "as_of_utc": "2026-09-15T07:18:17.897613+00:00",
   "purpose": "Candid implementation and MTU evidence ledger for the fixed WATER27 H2O8d2d single-A100 CCSD project.",
   "claim_policy": {
     "ten_x_claim_allowed": false,
@@ -18,9 +18,9 @@
     "frozen_baseline_commit": "a89b3ae018d4e82968323ef95645d91adde294aa",
     "feature_worktree": "analysis/research/ccsd/gpu4pyscf-a100-thc-rr",
     "g0_worktree": "analysis/research/ccsd/gpu4pyscf-g0-baseline",
-    "feature_source_state": "published-eq36-algebra-gate-passed-production-disabled-plus-snapshot-a-qualification-queued",
+    "feature_source_state": "published-eq36-algebra-gate-passed-algorithms8-10-version-of-record-numbering-audited-production-disabled-plus-snapshot-a-qualification-queued",
     "feature_performance_eligible": false,
-    "feature_head_before_ledger_update": "1a9eeb38e98bf044d542532b603f5d02295f2d0d",
+    "feature_head_before_ledger_update": "268ced2b090f6b5f7486ecbaf58c2361df3e3e06",
     "merged_implementation_commits": {
       "fused_r123": "29ceab6",
       "fixed_gpu_test_node": "56291e7",
@@ -66,13 +66,14 @@
       "rr_continuation_numeric_gate_closure": "2af67f5",
       "rr_orthogonality_threshold_boundary_test": "4e67878",
       "receipt_bound_gate_ledger": "92008c5",
-      "published_thc_omega_d_equation_audit": "1a9eeb3"
+      "published_thc_omega_d_equation_audit": "1a9eeb3",
+      "published_algorithms_8_10_numbering_audit": "268ced2"
     },
     "current_snapshot_a_head": "92008c580fb90c9c49f7cf1f6b087726650df9dd",
-    "previous_ledger_head": "d1eb26c262fbe2b9960320da7f2a7a14b6c79a6f",
-    "previous_ledger_head_role": "published Eq.36 evidence-ledger commit after immutable Snapshot A; Job 63020 remains bound to 92008c5",
-    "head_before_this_ledger_update": "d1eb26c262fbe2b9960320da7f2a7a14b6c79a6f",
-    "head_before_this_ledger_update_role": "published Eq.36 evidence ledger; this queue-state update changes no algorithm or immutable Snapshot A bytes"
+    "previous_ledger_head": "f77ef517bfaa62ef1676d8b2177d918f69c1719d",
+    "previous_ledger_head_role": "restored MTU queue-state ledger after immutable Snapshot A; Job 63020 remains bound to 92008c5",
+    "head_before_this_ledger_update": "268ced2b090f6b5f7486ecbaf58c2361df3e3e06",
+    "head_before_this_ledger_update_role": "published Algorithms 8-10 equation-numbering and nonacceptance-reason audit; immutable Snapshot A bytes remain unchanged"
   },
   "current_qualification_observation": {
     "evidence_state": "local_measured",
@@ -1212,7 +1213,7 @@
       "id": "G5",
       "name": "doubles-amplitude-thc-rr-ccsd",
       "evidence_state": "local_measured",
-      "state": "published-eq36-algebra-gate-passed-exact-full-pair-total-identity-passed-production-disabled",
+      "state": "published-eq36-algebra-gate-passed-algorithms8-10-version-of-record-numbering-audited-exact-full-pair-total-identity-passed-production-disabled",
       "decision": "advance-to-receipt-bound-water2-complete-equation-and-inexact-fit-gates-while-keeping-production-disabled",
       "method_class": "controlled-approximation",
       "acceptance_table": "A",
@@ -1241,7 +1242,7 @@
         "Audit-only paper Algorithm 6 evaluates the joint Omega-A/Omega-C contraction schedule with dense equation oracles (f2f8e6c).",
         "Factorized MP2 natural-occupation weights are derived without dense four-index ERIs and remain audit-only (4c175a1).",
         "Audit-only paper Algorithm 7 exposes Omega-D components and signed Appendix schedules (aae92e0).",
-        "Audit-only paper Algorithms 8-10 expose Omega-G/H, Omega-E, and Omega-I/J endpoints with dense Eq. 38-42 oracles, asymmetric-core tests, and fail-closed backend/device/dtype/finite checks (c8f3aba).",
+        "Audit-only paper Algorithms 8-10 expose Omega-G/H, Omega-E, and Omega-I/J endpoints with dense published Eq. 39-43 oracles, explicit arXiv-v1 legacy numbering, asymmetric-core tests, and fail-closed backend/device/dtype/finite checks (268ced2).",
         "Weighted ERI-THC preprocessing connects factorized MP2 weights to the Eq. 17/Eqs. 19-21 audit seam without enabling the production driver (59c5aee).",
         "The complete THC audit CUDA suite is registered by 9f19693 and its cross-BLAS portability assertions are corrected by 5256763.",
         "The provenance-bound T1-transformed inactive F-hat builder independently constructs the one-electron and Cholesky contributions required by Algorithms 8-10 without dense four-index ERIs or doubles (a1adb89).",
@@ -1336,15 +1337,52 @@
           "instance_numerical_equivalence_oracle": "thc_omega_cd_joint_audit"
         },
         "algorithms_8_10_state": {
-          "source_commit": "c8f3aba",
+          "source_commit": "268ced2",
           "audit_only": true,
           "production_enabled": false,
           "performance_eligible": false,
-          "algorithm8_boundary": "Eq. 38 uses l_ji D_ja while Appendix Algorithm 8 line 13 prints l_ij D_ja; both are exposed separately for audit and no production convention is selected.",
+          "equation_numbering_authority": "J. Chem. Phys. 156, 054102 (2022), DOI 10.1063/5.0077770",
+          "published_equation_numbers": {
+            "algorithm8": [
+              39,
+              40,
+              41
+            ],
+            "algorithm9": [
+              40,
+              41,
+              42
+            ],
+            "algorithm10": [
+              43
+            ]
+          },
+          "legacy_arxiv_v1_equation_numbers": {
+            "algorithm8": [
+              38,
+              39,
+              40
+            ],
+            "algorithm9": [
+              39,
+              40,
+              41
+            ],
+            "algorithm10": [
+              42
+            ]
+          },
+          "algorithm8_boundary": "Published Eq. 39 uses l_ji D_ja while Appendix Algorithm 8 line 13 prints l_ij D_ja; both are exposed separately for audit and no production convention is selected.",
+          "focused_tests_passed": 34,
+          "focused_tests_skipped_environment": 3,
+          "all_thc_tests_passed": 256,
+          "all_thc_tests_skipped_environment": 34,
+          "stale_eq35_acceptance_reason_removed": true,
+          "legacy_arxiv_v1_eq35_acceptance_blocker": false,
           "unresolved_conventions": [
-            "paper delta_XY placement",
-            "T1-transformed Fock convention",
-            "Eq. 42 formal equivalence for nonsymmetric amplitude cores"
+            "literal Algorithm 8 Kronecker delta versus the inexact tau-metric/full-equation convention",
+            "physical-CD versus RR-effective T1-transformed Fock convention",
+            "published Eq. 43 formal equivalence for nonsymmetric amplitude cores"
           ]
         },
         "factorized_mp2_weights_state": {
@@ -1495,15 +1533,15 @@
         "The coordinate transforms/stream are shared, but exact Algorithms 1-3 are still evaluated as the subtraction oracle in addition to the six exact RR component kernels.",
         "The algebraic provenance buckets do not identify a complete production Woooo/Wvvvv/ring partition; Algorithm 2 contains a core-independent bare-ovov contribution.",
         "Algorithms 4-10, MP2 weights, weighted ERI-THC preprocessing, F-hat, and the complete from-zero assembler remain audit endpoints and are not connected to the production iterative driver.",
-        "Algorithm 8 has a paper boundary between Eq. 38 (l_ji D_ja) and Appendix Algorithm 8 line 13 (l_ij D_ja); the endpoint exposes both and fails closed instead of choosing silently.",
-        "Algorithms 8-10 retain unresolved delta_XY and transformed-F conventions; Eq. 42 formal equivalence is limited to a symmetric amplitude core, while the nonsymmetric-core schedule is Appendix-literal audit only.",
+        "Algorithm 8 has a paper boundary between published Eq. 39 (l_ji D_ja) and Appendix Algorithm 8 line 13 (l_ij D_ja); the endpoint exposes both and fails closed instead of choosing silently.",
+        "Algorithms 8-10 retain unresolved delta_XY and transformed-F conventions; published Eq. 43 formal equivalence is limited to a symmetric amplitude core, while the nonsymmetric-core schedule is Appendix-literal audit only.",
         "No inexact THC production substitution is accepted until equation-level composition plus water2 and water4 residual/accuracy gates pass.",
         "Jobs 62650 and 62651 are non-fixed-node CUDA correctness audits and contain no formal accuracy or performance evidence.",
         "The final published Eq. 36 algebra gate is local small-tensor evidence only. The complete assembler asserts the equation-version contract and optional gauge precondition but does not claim per-instance dense numerical equivalence; that remains the separate joint-audit oracle."
       ],
       "missing": [
         "A100 fused full-pair endpoint validation from the frozen A2 snapshot.",
-        "A uniquely justified Algorithm 8 Eq. 38/Appendix convention and complete delta_XY equation ledger using the independently audited F-hat builder.",
+        "A uniquely justified published Algorithm 8 Eq. 39/Appendix line-13 convention and complete delta_XY equation ledger using the independently audited F-hat builder.",
         "Production-driver integration only after all composition gates pass.",
         "Term-by-term inexact WATER2 and WATER4 equation comparisons, followed only for a passing WATER8 candidate by the eight-ghost-monomer counterpoise records.",
         "THC fit-inclusive qualified water8 timing and error.",
