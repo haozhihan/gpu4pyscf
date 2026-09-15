@@ -288,6 +288,15 @@ def test_published_contract_is_asserted_but_numerical_gate_stays_closed():
     assert metadata["algorithm10_symmetric_core_precondition_checked"] is True
     assert metadata["algorithm10_nonsymmetric_core_equivalence"] is False
     assert metadata["algorithm10_nonsymmetric_core_production_eligible"] is False
+    assert metadata["amplitude_core_symmetry_hard_limit"] == (
+        complete.FP64_AMPLITUDE_CORE_SYMMETRY_HARD_LIMIT
+    )
+    assert metadata["amplitude_core_symmetry_hard_limit_dtype"] == "float64"
+    assert metadata["amplitude_core_symmetry_tolerance_within_hard_limit"] is True
+    assert metadata["amplitude_core_symmetry_tolerance_is_absolute"] is True
+    assert metadata["amplitude_core_symmetry_hard_limit_policy"] == (
+        "roundoff-audit-only-production-remains-disabled"
+    )
     assert metadata["accepted"] is False
     assert metadata["production_enabled"] is False
     assert metadata["complete_validated"] is False
@@ -585,6 +594,49 @@ def test_algorithm10_requires_symmetric_amplitude_core():
     nonsymmetric[0, 1] += 1e-8
     with pytest.raises(ValueError, match="amplitude_core must be symmetric"):
         _assemble(problem, amplitude_core=nonsymmetric)
+
+
+def test_large_tolerance_cannot_bypass_amplitude_core_symmetry_gate():
+    problem = _problem(seed=1623)
+    nonsymmetric = problem["amplitude_core"].copy()
+    nonsymmetric[0, 1] += 1e-4
+
+    with pytest.raises(ValueError, match="fixed FP64 hard limit"):
+        _assemble(
+            problem,
+            amplitude_core=nonsymmetric,
+            amplitude_core_symmetry_tolerance=1.0,
+        )
+    with pytest.raises(ValueError, match="amplitude_core must be symmetric"):
+        _assemble(
+            problem,
+            amplitude_core=nonsymmetric,
+            amplitude_core_symmetry_tolerance=(
+                complete.FP64_AMPLITUDE_CORE_SYMMETRY_HARD_LIMIT
+            ),
+        )
+
+
+def test_roundoff_level_core_asymmetry_is_audit_compatible_under_hard_limit():
+    problem = _problem(seed=1624)
+    roundoff_core = problem["amplitude_core"].copy()
+    roundoff_core[0, 1] = np.nextafter(roundoff_core[0, 1], np.inf)
+    asymmetry = np.max(np.abs(roundoff_core - roundoff_core.T))
+    assert 0.0 < asymmetry < complete.FP64_AMPLITUDE_CORE_SYMMETRY_HARD_LIMIT
+
+    result = _assemble(
+        problem,
+        amplitude_core=roundoff_core,
+        amplitude_core_symmetry_tolerance=(
+            complete.FP64_AMPLITUDE_CORE_SYMMETRY_HARD_LIMIT
+        ),
+    )
+    metadata = result.metadata()
+    assert metadata["amplitude_core_max_asymmetry"] == asymmetry
+    assert metadata["amplitude_core_symmetry_tolerance"] == (
+        complete.FP64_AMPLITUDE_CORE_SYMMETRY_HARD_LIMIT
+    )
+    assert metadata["production_enabled"] is False
 
 
 def test_complete_assembler_rejects_unresolved_delta_or_asymmetric_core(

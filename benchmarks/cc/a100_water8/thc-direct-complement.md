@@ -242,7 +242,11 @@ nonsymmetric core shows the exact relation: the Appendix schedule uses `T` in
 the Coulomb-like `2*t` term and `T.T` in the exchange-like term. It therefore
 does not equal published Eq. 43 for a general nonsymmetric core. The standalone
 endpoint retains that case only as an audit diagnostic; the complete assembler
-rejects it, while the symmetric endpoint continues to agree with Eq. 43. The
+rejects it, while the symmetric endpoint continues to agree with Eq. 43. Its
+optional absolute FP64 symmetry tolerance is capped by the fixed `1e-10` hard
+limit; a caller cannot select the nonsymmetric convention by passing a large
+tolerance. A one-ULP asymmetry may be admitted under that bound for audit, but
+all production and acceptance flags remain false. The
 final JCP version of record numbers Algorithm
 8 as Eqs. 39--41, Algorithm 9 as Eqs. 40--42, and Algorithm 10 as Eq. 43; the
 corresponding arXiv-v1 numbers 38--40, 39--41, and 42 remain legacy metadata.
@@ -338,9 +342,11 @@ has passed.
   `delta_XY` and rejects the pair-Gram substitution. A separate scalar-loop
   counterexample proves that nonsymmetric-core Algorithm 10 is a mixed
   `T`/`T.T` expression rather than published Eq. 43, and the complete assembler
-  rejects both an unresolved delta contract and an asymmetric core. These are
-  local algebra results only. The arXiv-v1 Eq. 38--42 numbering is retained
-  only as versioned legacy metadata.
+  rejects both an unresolved delta contract and a materially asymmetric core.
+  The symmetry tolerance cannot exceed the fixed `1e-10` FP64 absolute hard limit,
+  closing the large-tolerance bypass while preserving an explicit audit window
+  for roundoff. These are local algebra results only. The arXiv-v1 Eq. 38--42
+  numbering is retained only as versioned legacy metadata.
 - The provenance-bound T1-transformed inactive F-hat builder passes independent
   dense and provider audits without constructing four-index ERIs or doubles.
 - The Algorithms 1--10 audit assembler enforces the from-zero ledger, XOR

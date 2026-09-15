@@ -66,6 +66,13 @@ _PROVENANCE_KEYS = {
 }
 _OMEGA_AC_PATHS = {"separate-4-plus-5", "joint-6"}
 
+# Algorithm 10 is published Eq. 43 only at the symmetric amplitude-core
+# endpoint.  Permit an explicitly requested absolute tolerance for FP64
+# roundoff, but never let a caller turn that numerical allowance into a
+# convention switch.  This fixed ceiling is intentionally independent of the
+# caller-provided tolerance.
+FP64_AMPLITUDE_CORE_SYMMETRY_HARD_LIMIT = 1.0e-10
+
 
 def _array_module(value: Any):
     module = type(value).__module__.split(".", 1)[0]
@@ -522,6 +529,14 @@ def _validate_inputs(
         amplitude_core_symmetry_tolerance,
         name="amplitude_core_symmetry_tolerance",
     )
+    if symmetry_tolerance > FP64_AMPLITUDE_CORE_SYMMETRY_HARD_LIMIT:
+        raise ValueError(
+            "amplitude_core_symmetry_tolerance exceeds the fixed FP64 hard "
+            "limit: "
+            f"tolerance={symmetry_tolerance:.17g}, "
+            "hard_limit="
+            f"{FP64_AMPLITUDE_CORE_SYMMETRY_HARD_LIMIT:.17g}"
+        )
     asymmetry = _read_control_scalar(
         xp,
         xp.max(xp.abs(amplitude_core - amplitude_core.T)),
@@ -821,6 +836,15 @@ class THCCompleteAuditResult:
             "amplitude_core_symmetry_tolerance": float(
                 self.amplitude_core_symmetry_tolerance
             ),
+            "amplitude_core_symmetry_hard_limit": (
+                FP64_AMPLITUDE_CORE_SYMMETRY_HARD_LIMIT
+            ),
+            "amplitude_core_symmetry_hard_limit_dtype": "float64",
+            "amplitude_core_symmetry_tolerance_within_hard_limit": True,
+            "amplitude_core_symmetry_tolerance_is_absolute": True,
+            "amplitude_core_symmetry_hard_limit_policy": (
+                "roundoff-audit-only-production-remains-disabled"
+            ),
             "algorithm8_delta_xy_convention": (
                 "published-algorithm8-line8-kronecker-identity"
             ),
@@ -955,6 +979,11 @@ def assemble_complete_thc_ccsd_audit(
 
     ``omega_ac_path`` selects either separate Algorithms 4 and 5 or joint
     Algorithm 6.  It is an exclusive choice; no execution path can add both.
+
+    ``amplitude_core_symmetry_tolerance`` is an absolute FP64 roundoff
+    allowance.  Values above
+    ``FP64_AMPLITUDE_CORE_SYMMETRY_HARD_LIMIT`` are rejected rather than
+    weakening the symmetric-core Eq. 43 precondition.
 
     ``require_eq35_equivalence`` is retained as a deprecated parameter name.
     When true it asserts the scoped version-of-record Eq. 36 contract
@@ -1319,6 +1348,7 @@ def assemble_complete_thc_ccsd_audit(
 
 
 __all__ = [
+    "FP64_AMPLITUDE_CORE_SYMMETRY_HARD_LIMIT",
     "IdentityAttestedERITHCFactors",
     "THCCompleteAuditLedgerEntry",
     "THCCompleteAuditLedger",
