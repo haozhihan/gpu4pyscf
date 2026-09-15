@@ -1,6 +1,6 @@
 {
   "schema": "gpu4pyscf.water8.implementation-status.v2",
-  "as_of_utc": "2026-09-15T06:36:18.904433+00:00",
+  "as_of_utc": "2026-09-15T06:50:43.689037+00:00",
   "purpose": "Candid implementation and MTU evidence ledger for the fixed WATER27 H2O8d2d single-A100 CCSD project.",
   "claim_policy": {
     "ten_x_claim_allowed": false,
@@ -69,10 +69,10 @@
       "published_thc_omega_d_equation_audit": "1a9eeb3"
     },
     "current_snapshot_a_head": "92008c580fb90c9c49f7cf1f6b087726650df9dd",
-    "previous_ledger_head": "3aa2d561cac461750082593dd9ca1636ee6d1e15",
-    "previous_ledger_head_role": "evidence-ledger-only commit after immutable Snapshot A; queued Job 63020 remains bound to 92008c5",
-    "head_before_this_ledger_update": "1a9eeb38e98bf044d542532b603f5d02295f2d0d",
-    "head_before_this_ledger_update_role": "published Eq.36 algebra code/tests; queued Job 63020 remains bound to immutable Snapshot A 92008c5"
+    "previous_ledger_head": "d1eb26c262fbe2b9960320da7f2a7a14b6c79a6f",
+    "previous_ledger_head_role": "published Eq.36 evidence-ledger commit after immutable Snapshot A; Job 63020 remains bound to 92008c5",
+    "head_before_this_ledger_update": "d1eb26c262fbe2b9960320da7f2a7a14b6c79a6f",
+    "head_before_this_ledger_update_role": "published Eq.36 evidence ledger; this queue-state update changes no algorithm or immutable Snapshot A bytes"
   },
   "current_qualification_observation": {
     "evidence_state": "local_measured",
@@ -84,14 +84,20 @@
       "job_id": 63020,
       "job_name": "gint-water2-gate",
       "purpose": "reference selected-GINT WATER2 qualification",
-      "requested_node": "compute-1-0",
+      "requested_node": "compute-1-[0,2-3]",
       "state": "PENDING",
       "reason": "Priority",
       "elapsed": "00:00:00",
       "eligible_time_mtu": "2026-09-15T01:54:19",
       "scheduler_estimated_start_mtu": "2026-09-17T01:34:14",
       "hold_released": true,
-      "dependency": null
+      "dependency": null,
+      "candidate_nodes": [
+        "compute-1-0",
+        "compute-1-2",
+        "compute-1-3"
+      ],
+      "node_expansion_applied": true
     },
     "submission_audit": "results/mtu/qualification-92008.json",
     "release_audit": "results/mtu/qualification-63020-release.json",
@@ -100,8 +106,8 @@
     "release_snapshot_b_created": false,
     "formal_performance_eligible": false,
     "claim_limit": "Volatile queue-control plus immutable-source readiness only; the job has not run and supplies no numerical, accuracy, release-B, or performance result.",
-    "captured_utc": "2026-09-15T05:55:43Z",
-    "captured_mtu": "2026-09-15T01:55:43-04:00",
+    "captured_utc": "2026-09-15T06:50:43.689037+00:00",
+    "captured_mtu": "2026-09-15T02:50:49-04:00",
     "volatile_scheduler_observation": true,
     "ttl_note": "Re-query squeue/scontrol for live state; immutable snapshot and audit hashes remain stable.",
     "qualified_source_head": "92008c580fb90c9c49f7cf1f6b087726650df9dd",
@@ -112,13 +118,56 @@
     "qualifies_snapshot_a_only": true,
     "does_not_qualify_later_ledger_commit_or_mutable_worktree": true,
     "latest_infrastructure_observation": {
-      "observed_utc": "2026-09-15T06:25:15.205524+00:00",
-      "connection_result": "rejected-before-shell-pam_nologin-system-going-down",
-      "queue_state_observed": false,
-      "interpretation": "No newer Slurm state was obtained; retain last verified PENDING state without classifying any job as failed or resubmitting.",
-      "evidence": "results/mtu/infrastructure-poll-20260915T062515Z.json",
-      "sha256": "81eb5df810373d20dbbb257335700a33c1c49d59fa7ec5787359fe04e3f3f6ca"
-    }
+      "observed_utc": "2026-09-15T06:50:43.689037+00:00",
+      "connection_result": "success",
+      "queue_state_observed": true,
+      "jobs": {
+        "63068": {
+          "state": "PENDING",
+          "reason": "Priority",
+          "elapsed": "0:00",
+          "allocated_nodelist": null,
+          "estimated_start_mtu": "2026-09-17T01:34:14"
+        },
+        "63069": {
+          "state": "PENDING",
+          "reason": "Priority",
+          "elapsed": "0:00",
+          "allocated_nodelist": null,
+          "estimated_start_mtu": "2026-09-17T01:34:14"
+        },
+        "63020": {
+          "state": "PENDING",
+          "reason": "Priority",
+          "elapsed": "0:00",
+          "allocated_nodelist": null,
+          "estimated_start_mtu": "2026-09-17T01:34:14"
+        }
+      },
+      "candidate_node_states": {
+        "compute-1-0": {
+          "state": "down*",
+          "gres": "gpu:nvidia:4"
+        },
+        "compute-1-2": {
+          "state": "mixed",
+          "gres": "gpu:nvidia:4"
+        },
+        "compute-1-3": {
+          "state": "mixed",
+          "gres": "gpu:nvidia:4"
+        },
+        "compute-1-5": {
+          "state": "down*",
+          "gres": "gpu:nvidia:4"
+        }
+      },
+      "interpretation": "A successful SSH/Slurm poll after the in-place candidate-node expansion directly observed jobs 63020, 63068, and 63069 as PENDING Priority with no allocation and no terminal result; no duplicate was submitted.",
+      "evidence": "results/mtu/infrastructure-poll-20260915T065043Z.json",
+      "sha256": "8e153347d1c618dcc7c56c8a6832abf1266e40512c6cc93a0ea86e90c2c465b0"
+    },
+    "node_expansion_audit": "results/mtu/qualification-63020-node-expansion.json",
+    "node_expansion_audit_sha256": "7a63ca380dc118c3ad0a31f743c121e154fc0866a3169f31fee671fc3efca27f"
   },
   "contract": {
     "evidence_state": "source_reported",
@@ -523,10 +572,11 @@
         "Water2/water4/water8 thresholds 1e-4, 1e-6, and 1e-8 with energy errors, followed by WATER8 counterpoise error"
       ],
       "verified": [
-        "Snapshot A 29a74a45... at source head 92008c5 is immutable and runtime-closed with bundle 70ee88f7...; Job 63020 is the reference selected-GINT WATER2 qualification on compute-1-0."
+        "Snapshot A 29a74a45... at source head 92008c5 is immutable and runtime-closed with bundle 70ee88f7...; Job 63020 is the reference selected-GINT WATER2 qualification.",
+        "After compute-1-0 was observed down, pending unallocated Job 63020 was expanded in place to approved candidate nodes compute-1-[0,2-3]; runtime topology and every downstream consumer remain bound to the actual qualification node through the write-once receipt."
       ],
       "active": [
-        "Job 63020 was last verified PENDING Priority at 2026-09-15T05:55:43Z. A later SSH poll was rejected by pam_nologin before shell, so no newer scheduler state is asserted."
+        "A successful SSH/Slurm poll at 2026-09-15T06:50:43.689037+00:00 directly observed Job 63020 PENDING Priority with elapsed 00:00:00 and no allocated node; Jobs 63068 and 63069 were also PENDING Priority."
       ]
     },
     {
@@ -2974,6 +3024,31 @@
       "resubmission_action": "none",
       "result": "results/mtu/infrastructure-poll-20260915T062515Z.json",
       "sha256": "81eb5df810373d20dbbb257335700a33c1c49d59fa7ec5787359fe04e3f3f6ca"
+    },
+    "mtu_infrastructure_poll_20260915T064846Z": {
+      "evidence_state": "local_measured",
+      "connection_result": "success",
+      "queue_state_observed": true,
+      "job_state_interpretation": "pre-node-expansion queue snapshot: all three jobs PENDING Priority; compute-1-0 and compute-1-5 down, compute-1-2 and compute-1-3 mixed",
+      "resubmission_action": "none",
+      "result": "results/mtu/infrastructure-poll-20260915T064846Z.json",
+      "sha256": "a199631b9706d2b4ade6f7e88d7cda0c2569d397d230318c7495127d53efb53e"
+    },
+    "qualification_63020_node_expansion": {
+      "evidence_state": "local_measured",
+      "action": "expanded existing pending Job 63020 candidate nodes from compute-1-0 to compute-1-[0,2-3] without cancellation or resubmission",
+      "claim_limit": "queue-control only; no numerical, topology, release-B, or performance result",
+      "result": "results/mtu/qualification-63020-node-expansion.json",
+      "sha256": "7a63ca380dc118c3ad0a31f743c121e154fc0866a3169f31fee671fc3efca27f"
+    },
+    "mtu_infrastructure_poll_20260915T065043Z": {
+      "evidence_state": "local_measured",
+      "connection_result": "success",
+      "queue_state_observed": true,
+      "job_state_interpretation": "post-node-expansion queue snapshot: jobs 63020, 63068, and 63069 all PENDING Priority with no allocation or terminal result",
+      "resubmission_action": "none",
+      "result": "results/mtu/infrastructure-poll-20260915T065043Z.json",
+      "sha256": "8e153347d1c618dcc7c56c8a6832abf1266e40512c6cc93a0ea86e90c2c465b0"
     }
   },
   "accuracy_tables": {
@@ -3173,6 +3248,12 @@
       "statement": "Snapshot A 29a74a45... is immutable/runtime-closed and its reference selected-GINT qualification Job 63020 was released from user hold into PENDING Priority on compute-1-0.",
       "evidence": "results/mtu/qualification-92008.json and results/mtu/qualification-63020-release.json",
       "claim_limit": "Queue-control and packaging evidence only; Job 63020 has not run and establishes no numerical, release-B, or performance result."
+    },
+    {
+      "evidence_state": "local_measured",
+      "statement": "After compute-1-0 was observed down, existing unallocated Job 63020 was expanded in place to approved candidate nodes compute-1-[0,2-3] and remained PENDING Priority; no job was cancelled or duplicated.",
+      "evidence": "results/mtu/qualification-63020-node-expansion.json and results/mtu/infrastructure-poll-20260915T065043Z.json",
+      "claim_limit": "Queue-control evidence only. Runtime topology must qualify the actual allocated node, and the receipt/release-B/G4/G5 chain must bind that exact node."
     }
   ],
   "performance_claim": {
@@ -3201,12 +3282,12 @@
   "artifact_inventory": {
     "path_from_workspace_root": "output/water8-ccsd-implementation-artifacts.sha256",
     "schema": "agent-qc.local-mtu-results-inventory.v2",
-    "generated_utc": "2026-09-15T06:33:28.389451+00:00",
+    "generated_utc": "2026-09-15T06:51:15.816889+00:00",
     "scope": "Every regular file locally present under benchmarks/cc/a100_water8/results/mtu at the inventory timestamp; the inventory itself is outside that root and excluded.",
-    "raw_file_count_at_inventory": 506,
-    "raw_total_bytes_at_inventory": 79593781,
-    "inventory_entry_count": 506,
-    "inventory_sha256": "9af6ddbf4c59d04e081372ef98aab74368e266c50adc2693ab435fa29860c4df",
+    "raw_file_count_at_inventory": 509,
+    "raw_total_bytes_at_inventory": 79618884,
+    "inventory_entry_count": 509,
+    "inventory_sha256": "285c33f05843e5e97e83f365237e0401f2f59c660b4912fae1a4ba6b9b917642",
     "self_hash_policy": "inventory is outside inventory_root and is not listed",
     "verification_command": "python3 analysis/research/ccsd/baseline-comparison/build_mtu_results_inventory.py --check",
     "remote_only_checkpoints": [
@@ -3226,7 +3307,7 @@
   "update_protocol": {
     "running_jobs": [],
     "pending_jobs": [
-      "63020 Snapshot A reference selected-GINT WATER2 qualification: PENDING Priority on compute-1-0, elapsed 00:00:00; hold released 2026-09-15T01:54:19-04:00."
+      "63020 Snapshot A reference selected-GINT WATER2 qualification: PENDING Priority on approved candidate nodes compute-1-[0,2-3], elapsed 00:00:00; hold released 2026-09-15T01:54:19-04:00 and node set expanded in place at 2026-09-15T02:50:17-04:00."
     ],
     "on_job_completion": [
       "Sync raw stdout/stderr, result JSON, checkpoint, topology record, and Slurm accounting.",
