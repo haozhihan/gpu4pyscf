@@ -1,0 +1,14 @@
+{
+  "notes": [
+    "The pinned GANSU v2 runner and its Slurm launcher accept only water2-tz.",
+    "A WATER4 argv must not be generated from this WATER2 receipt; first add WATER4 support and rerun the WATER2 gate with the new runner digest."
+  ],
+  "result_schema": "agent-qc.single-a100-gansu-ri-rccsd.v2",
+  "runner_sha256": "d3b1119fc132ee22970d207b186528cc7b3c8abafa762df371dbd6d742bb0ccf",
+  "schema": "agent-qc.external-baseline-runner-capabilities.v1",
+  "software": "gansu",
+  "supported_cases": [
+    "water2-tz"
+  ],
+  "water4_argv_supported": false
+}
