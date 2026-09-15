@@ -87,7 +87,13 @@ SOFTWARE = {
 
 
 def _canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
 
 
 def _payload_sha256(value: Any) -> str:
@@ -104,9 +110,15 @@ def _file_sha256(path: Path) -> str:
 
 def _read_json(path: Path, label: str) -> dict[str, Any]:
     resolved = path.expanduser().resolve(strict=True)
+
+    def reject_constant(token: str) -> None:
+        raise ValueError(f"non-standard JSON numeric constant {token!r} is forbidden")
+
     try:
-        value = json.loads(resolved.read_text(encoding="utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        value = json.loads(
+            resolved.read_text(encoding="utf-8"), parse_constant=reject_constant
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError(f"{label} is not valid UTF-8 JSON: {resolved}: {exc}") from exc
     if not isinstance(value, dict):
         raise ValueError(f"{label} must contain one JSON object: {resolved}")
@@ -128,7 +140,7 @@ def _write_json_once(path: Path, payload: Mapping[str, Any]) -> None:
     resolved.parent.mkdir(parents=True, exist_ok=True)
     try:
         with resolved.open("x", encoding="utf-8") as stream:
-            json.dump(payload, stream, indent=2, sort_keys=True)
+            json.dump(payload, stream, indent=2, sort_keys=True, allow_nan=False)
             stream.write("\n")
     except FileExistsError as exc:
         raise FileExistsError(f"refusing to overwrite {resolved}") from exc
@@ -173,8 +185,39 @@ def _sha(value: Any) -> str | None:
 
 def _geometry_sha256(case: Mapping[str, Any]) -> str:
     geometry = case.get("geometry_angstrom")
-    encoded = json.dumps(geometry, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+    errors = _geometry_contract_errors(geometry, "geometry")
+    if errors:
+        raise ValueError("; ".join(errors))
+    encoded = json.dumps(
+        geometry,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("ascii")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _geometry_contract_errors(geometry: Any, label: str) -> list[str]:
+    if not isinstance(geometry, list) or not geometry:
+        return [f"{label} must be a non-empty list of atom rows"]
+    reasons: list[str] = []
+    for index, row in enumerate(geometry):
+        if not isinstance(row, list) or len(row) != 4:
+            reasons.append(f"{label} row {index} must contain one atom and three coordinates")
+            continue
+        atom = row[0]
+        if not isinstance(atom, str) or re.fullmatch(r"[A-Z][a-z]?", atom) is None:
+            reasons.append(f"{label} row {index} has an invalid atom symbol")
+        for axis, coordinate in zip("xyz", row[1:]):
+            if (
+                isinstance(coordinate, bool)
+                or not isinstance(coordinate, (int, float))
+                or not math.isfinite(float(coordinate))
+            ):
+                reasons.append(
+                    f"{label} row {index} coordinate {axis} is not a finite JSON number"
+                )
+    return reasons
 
 
 def _case_contract(cases: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -302,17 +345,26 @@ def _case_gate(
     dimensions = trusted.get("expected_dimensions")
     if dimensions != {"nao": 116, "nocc": 10, "nvir": 106}:
         reasons.append("trusted water2 dimensions differ from nao=116,nocc=10,nvir=106")
-    if not isinstance(trusted.get("geometry_angstrom"), list):
-        reasons.append("trusted water2 geometry is missing")
-    expected_geometry_sha = _geometry_sha256(trusted)
+    trusted_geometry_errors = _geometry_contract_errors(
+        trusted.get("geometry_angstrom"), "trusted water2 geometry"
+    )
+    reasons.extend(trusted_geometry_errors)
+    expected_geometry_sha = (
+        None if trusted_geometry_errors else _geometry_sha256(trusted)
+    )
     candidate_case = result.get("case")
     if not isinstance(candidate_case, Mapping):
         reasons.append("result case object is missing")
     else:
+        reasons.extend(
+            _geometry_contract_errors(
+                candidate_case.get("geometry_angstrom"), "result water2 geometry"
+            )
+        )
         for field in ("id", "source", "basis", "expected_dimensions", "geometry_angstrom"):
             if candidate_case.get(field) != trusted.get(field):
                 reasons.append(f"result case field {field} differs from the trusted contract")
-    if result.get("geometry_sha256") != expected_geometry_sha:
+    if expected_geometry_sha is None or result.get("geometry_sha256") != expected_geometry_sha:
         reasons.append("result geometry SHA-256 differs from the trusted geometry")
     observed_dimensions = result.get("dimensions")
     if not isinstance(observed_dimensions, Mapping):
@@ -620,6 +672,10 @@ def _convergence_gate(software: str, result: Mapping[str, Any]) -> dict[str, Any
         count = convergence.get("ccsd_callback_count")
         if isinstance(count, bool) or not isinstance(count, int) or count < 1:
             reasons.append("GANSU CCSD callback history is empty")
+        reasons.append(
+            "GANSU v2 exposes no final observed CCSD residual or update norm; "
+            "callback-inferred convergence is diagnostic and cannot authorize WATER4"
+        )
     return _gate(not reasons, reasons)
 
 
@@ -672,7 +728,14 @@ def _oracle_gate(
         reasons.append("oracle protocol schema is unsupported")
     if oracle.get("status") != "completed" or oracle.get("method") != "canonical":
         reasons.append("oracle is not a completed canonical GPU4PySCF result")
-    expected_geometry = _geometry_sha256(trusted_case) if trusted_case is not None else None
+    expected_geometry = None
+    if trusted_case is not None:
+        geometry_errors = _geometry_contract_errors(
+            trusted_case.get("geometry_angstrom"), "trusted oracle geometry"
+        )
+        reasons.extend(geometry_errors)
+        if not geometry_errors:
+            expected_geometry = _geometry_sha256(trusted_case)
     if oracle.get("case_id") != CASE_ID or oracle.get("geometry_sha256") != expected_geometry:
         reasons.append("oracle case or geometry differs from the trusted WATER2 contract")
     if _at(oracle, "case.basis") != EXPECTED_BASIS:
@@ -769,6 +832,12 @@ def _formal_comparability(software: str, result: Mapping[str, Any]) -> dict[str,
         ):
             reasons.append("candidate final full-space residual is not a timed <=1e-6 check")
     if software == "byteqc":
+        source_tree_sha = _at(result, "provenance.source_tree_sha256")
+        if _sha(source_tree_sha) is None:
+            reasons.append(
+                "ByteQC result lacks an immutable source-tree content SHA-256; "
+                "commit and selected-file hashes support L1 only"
+            )
         oracle_orbits = _at(result, "canonical_orbitals.artifact_sha256")
         if _sha(oracle_orbits) is None:
             reasons.append("candidate does not prove the exact V1 canonical orbital artifact")
@@ -807,6 +876,8 @@ def audit_external_result(
 ) -> dict[str, Any]:
     if software not in SOFTWARE:
         raise ValueError(f"unsupported software {software!r}")
+    if energy_tolerance is not None and _finite_number(energy_tolerance) is None:
+        raise ValueError("energy tolerance must be a finite JSON number")
     result, result_ev = _evidence(result_path, "external result")
     scheduler, scheduler_ev = _evidence(scheduler_path, "scheduler evidence")
     cases, cases_ev = _evidence(cases_path, "trusted case contract")
@@ -862,6 +933,13 @@ def audit_external_result(
     }
     return {
         "schema": AUDIT_SCHEMA,
+        "auditor": {
+            "implementation_sha256": _file_sha256(Path(__file__).resolve()),
+        },
+        "audit_parameters": {
+            "software": software,
+            "energy_tolerance_eh": energy_tolerance,
+        },
         "software": software,
         "case_id": CASE_ID,
         "classification": classification,
@@ -886,6 +964,8 @@ def _verify_decision_evidence(decision: Mapping[str, Any]) -> list[str]:
         return ["audit decision has no evidence ledger"]
     for label in ("result", "scheduler", "cases", "runner_capabilities", "oracle"):
         item = evidence.get(label)
+        if label == "oracle" and item is None:
+            continue
         if not isinstance(item, Mapping):
             reasons.append(f"audit decision lacks {label} evidence")
             continue
@@ -902,6 +982,66 @@ def _verify_decision_evidence(decision: Mapping[str, Any]) -> list[str]:
     return reasons
 
 
+def _recompute_bound_decision(
+    decision: Mapping[str, Any],
+) -> tuple[dict[str, Any] | None, list[str]]:
+    """Re-run the exact audit recorded by a decision.
+
+    No eligibility boolean, gate, classification, or reason from the serialized
+    decision is authoritative.  The planner uses only this recomputed object.
+    """
+
+    reasons: list[str] = []
+    parameters = decision.get("audit_parameters")
+    if not isinstance(parameters, Mapping) or set(parameters) != {
+        "software",
+        "energy_tolerance_eh",
+    }:
+        return None, ["audit decision lacks the exact audit parameter set"]
+    software = parameters.get("software")
+    if software not in SOFTWARE:
+        return None, ["recorded audit software parameter is unsupported"]
+    tolerance = parameters.get("energy_tolerance_eh")
+    if tolerance is not None and _finite_number(tolerance) is None:
+        return None, ["recorded audit energy tolerance is not a finite JSON number"]
+    evidence = decision.get("evidence")
+    if not isinstance(evidence, Mapping):
+        return None, ["audit decision has no evidence ledger"]
+
+    def evidence_path(label: str, *, optional: bool = False) -> Path | None:
+        item = evidence.get(label)
+        if item is None and optional:
+            return None
+        if not isinstance(item, Mapping) or not isinstance(item.get("path"), str):
+            reasons.append(f"audit decision lacks the {label} evidence path")
+            return None
+        return Path(str(item["path"]))
+
+    result_path = evidence_path("result")
+    scheduler_path = evidence_path("scheduler")
+    cases_path = evidence_path("cases")
+    capabilities_path = evidence_path("runner_capabilities")
+    oracle_path = evidence_path("oracle", optional=True)
+    if any(
+        path is None
+        for path in (result_path, scheduler_path, cases_path, capabilities_path)
+    ):
+        return None, reasons
+    try:
+        recomputed = audit_external_result(
+            software=str(software),
+            result_path=result_path,
+            scheduler_path=scheduler_path,
+            cases_path=cases_path,
+            capabilities_path=capabilities_path,
+            oracle_path=oracle_path,
+            energy_tolerance=tolerance,
+        )
+    except (OSError, ValueError) as exc:
+        return None, [*reasons, f"bound audit recomputation failed: {exc}"]
+    return recomputed, reasons
+
+
 def make_water4_plan(
     *,
     decision_path: Path,
@@ -914,15 +1054,45 @@ def make_water4_plan(
     reasons: list[str] = []
     if decision.get("schema") != AUDIT_SCHEMA:
         reasons.append("audit decision schema is unsupported")
-    software = decision.get("software")
-    if software not in SOFTWARE:
-        reasons.append("audit decision software is unsupported")
-    if decision.get("case_id") != CASE_ID:
-        reasons.append("audit decision is not for water2-tz")
-    if decision.get("water2_gate_passed") is not True or decision.get("w4_eligible") is not True:
-        reasons.append("WATER2 audit did not pass every WATER4 promotion gate")
-        reasons.extend(str(item) for item in decision.get("w4_reasons", []))
     reasons.extend(_verify_decision_evidence(decision))
+    recomputed, recompute_reasons = _recompute_bound_decision(decision)
+    reasons.extend(recompute_reasons)
+    original_digest = _payload_sha256(decision)
+    recomputed_digest = _payload_sha256(recomputed) if recomputed is not None else None
+    semantic_fields = (
+        "software",
+        "case_id",
+        "classification",
+        "gates",
+        "water2_gate_passed",
+        "water2_blocking_gates",
+        "w4_eligible",
+        "w4_blocking_gates",
+        "w4_reasons",
+        "evidence",
+        "input_payload_sha256",
+        "audit_parameters",
+        "auditor",
+    )
+    semantic_match = bool(
+        recomputed is not None
+        and all(decision.get(field) == recomputed.get(field) for field in semantic_fields)
+    )
+    if recomputed is not None and original_digest != recomputed_digest:
+        reasons.append("serialized audit decision differs from a fresh bound-audit recomputation")
+    if recomputed is not None and not semantic_match:
+        reasons.append("serialized audit semantic fields differ from the recomputed audit")
+    if recomputed is not None and (
+        recomputed.get("water2_gate_passed") is not True
+        or recomputed.get("w4_eligible") is not True
+    ):
+        reasons.append("recomputed WATER2 audit did not pass every WATER4 promotion gate")
+        reasons.extend(str(item) for item in recomputed.get("w4_reasons", []))
+    software = recomputed.get("software") if recomputed is not None else None
+    if software not in SOFTWARE:
+        reasons.append("recomputed audit software is unsupported")
+    if recomputed is not None and recomputed.get("case_id") != CASE_ID:
+        reasons.append("recomputed audit is not for water2-tz")
     if RUN_ID_RE.fullmatch(run_id) is None:
         reasons.append("run id must be a safe 1-80 character identifier")
 
@@ -933,7 +1103,11 @@ def make_water4_plan(
     if not interpreter.is_file():
         reasons.append("Python executable is missing")
 
-    evidence = decision.get("evidence") if isinstance(decision.get("evidence"), Mapping) else {}
+    evidence = (
+        recomputed.get("evidence")
+        if recomputed is not None and isinstance(recomputed.get("evidence"), Mapping)
+        else {}
+    )
     capability_ev = evidence.get("runner_capabilities")
     capability = None
     if isinstance(capability_ev, Mapping) and isinstance(capability_ev.get("path"), str):
@@ -957,6 +1131,13 @@ def make_water4_plan(
         "w4_eligible": not reasons,
         "refusal_reasons": list(dict.fromkeys(reasons)),
         "audit_decision": decision_ev,
+        "audit_recomputation": {
+            "performed": recomputed is not None,
+            "original_payload_sha256": original_digest,
+            "recomputed_payload_sha256": recomputed_digest,
+            "exact_payload_match": recomputed_digest == original_digest,
+            "semantic_fields_match": semantic_match,
+        },
         "policy": "manifest-only dry run; this tool has no sbatch execution path",
     }
     if reasons or capability is None or software not in SOFTWARE:
@@ -990,7 +1171,7 @@ def make_water4_plan(
             "--output",
             str(output),
         ]
-        bound = decision["gates"]["source_receipt_binding"]["bound_sha256"]
+        bound = recomputed["gates"]["source_receipt_binding"]["bound_sha256"]
         environment = {
             "BYTEQC_EXPECTED_HARNESS_SHA256": bound["byteqc_benchmark.py"],
             "BYTEQC_EXPECTED_CASES_SHA256": bound["cases"],
@@ -1027,7 +1208,7 @@ def make_water4_plan(
             "GANSU_CCSD_RI_LADDER_TILE": "0",
             "GANSU_LIB": str(files["native_library"]["path"]),
         }
-        for key, digest in decision["gates"]["source_receipt_binding"]["bound_sha256"].items():
+        for key, digest in recomputed["gates"]["source_receipt_binding"]["bound_sha256"].items():
             environment[GANSU_DIGEST_ENV[key]] = digest
     plan["job"] = {
         "benchmark_argv": argv,
@@ -1085,7 +1266,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         if args.output is not None:
             _write_json_once(args.output, decision)
-        print(json.dumps(decision, indent=2, sort_keys=True))
+        print(json.dumps(decision, indent=2, sort_keys=True, allow_nan=False))
         return 0 if decision["w4_eligible"] else 2
     plan = make_water4_plan(
         decision_path=args.decision,
@@ -1096,7 +1277,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if args.manifest is not None:
         _write_json_once(args.manifest, plan)
-    print(json.dumps(plan, indent=2, sort_keys=True))
+    print(json.dumps(plan, indent=2, sort_keys=True, allow_nan=False))
     return 0 if plan["w4_eligible"] else 2
 
 

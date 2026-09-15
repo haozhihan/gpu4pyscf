@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 from pathlib import Path
 
 import pytest
@@ -356,6 +355,7 @@ def test_valid_byteqc_is_s_l1_w4_candidate_but_not_formal_v1(tmp_path: Path):
     assert formal["eligible"] is False
     assert any("checkpoint" in reason for reason in formal["reasons"])
     assert any("full-space residual" in reason for reason in formal["reasons"])
+    assert any("source-tree content SHA-256" in reason for reason in formal["reasons"])
     assert decision["gates"]["numerical_oracle"]["absolute_error_eh"] < 1e-8
 
 
@@ -363,7 +363,7 @@ def test_valid_byteqc_is_s_l1_w4_candidate_but_not_formal_v1(tmp_path: Path):
     ("mutator", "gate_name"),
     [
         (lambda result: result.update(status="failed"), "result_schema_status"),
-        (lambda result: result["timing_seconds"].update(post_hf_contract=math.nan), "timing"),
+        (lambda result: result["timing_seconds"].update(post_hf_contract=0.0), "timing"),
         (lambda result: result["case"].update(source="invented"), "case_contract"),
         (lambda result: result["dimensions"].update(nvir=105), "case_contract"),
         (lambda result: result["bound_topology"].update(hostname="compute-1-5"), "topology"),
@@ -443,25 +443,73 @@ def test_gansu_is_i_l2_diagnostic_and_current_runner_refuses_water4(tmp_path: Pa
         oracle_path=bundle["oracle"],
         energy_tolerance=1e-8,
     )
-    assert decision["water2_gate_passed"] is True
+    assert decision["water2_gate_passed"] is False
     assert decision["w4_eligible"] is False
-    assert decision["w4_blocking_gates"] == ["water4_runner_capability"]
+    assert decision["w4_blocking_gates"] == [
+        "convergence",
+        "water4_runner_capability",
+    ]
+    assert any(
+        "no final observed CCSD residual" in reason
+        for reason in decision["gates"]["convergence"]["reasons"]
+    )
     assert decision["classification"]["acceptance_table"] == "I"
     assert decision["classification"]["evidence_level"] == "L2"
     assert decision["classification"]["formal_v1_post_hf_comparability"]["eligible"] is False
 
 
-def test_missing_or_nan_required_fields_never_pass(tmp_path: Path):
+def test_missing_or_invalid_required_fields_never_pass(tmp_path: Path):
     bundle = byteqc_fixture(tmp_path)
     result = json.loads(Path(bundle["result"]).read_text())
     del result["convergence"]["history"]
-    result["energies_eh"]["e_corr"] = math.nan
-    result["host_max_rss_gib"] = math.inf
+    del result["energies_eh"]["e_corr"]
+    result["host_max_rss_gib"] = "not-a-number"
     write_json(Path(bundle["result"]), result)
     decision = run_byteqc_audit(bundle)
     assert decision["gates"]["convergence"]["passed"] is False
     assert decision["gates"]["resource_budget"]["passed"] is False
     assert decision["gates"]["numerical_oracle"]["passed"] is False
+
+
+@pytest.mark.parametrize("token", ["NaN", "Infinity", "-Infinity"])
+@pytest.mark.parametrize(
+    "evidence_name",
+    ["result", "scheduler", "cases", "capabilities", "oracle"],
+)
+def test_every_json_evidence_input_rejects_nonstandard_numeric_constants(
+    tmp_path: Path, evidence_name: str, token: str
+):
+    bundle = byteqc_fixture(tmp_path)
+    Path(bundle[evidence_name]).write_text(
+        '{"illegal_constant": ' + token + "}\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="non-standard JSON numeric constant"):
+        run_byteqc_audit(bundle)
+
+
+def test_canonical_payload_hash_refuses_nonfinite_python_values():
+    with pytest.raises(ValueError, match="Out of range float values"):
+        gate._payload_sha256({"coordinate": float("nan")})
+
+
+@pytest.mark.parametrize(
+    "bad_geometry",
+    [
+        [["O", 0.0, 0.0]],
+        [["not-an-atom", 0.0, 0.0, 0.0]],
+        [["O", 0.0, "bad", 0.0]],
+        ["not-a-row"],
+        [],
+    ],
+)
+def test_malformed_geometry_rows_fail_the_case_gate(tmp_path: Path, bad_geometry):
+    bundle = byteqc_fixture(tmp_path)
+    result = json.loads(Path(bundle["result"]).read_text())
+    result["case"]["geometry_angstrom"] = bad_geometry
+    write_json(Path(bundle["result"]), result)
+    decision = run_byteqc_audit(bundle)
+    assert decision["gates"]["case_contract"]["passed"] is False
+    assert decision["w4_eligible"] is False
 
 
 def test_valid_byteqc_plan_is_manifest_only_and_contains_water4_argv(tmp_path: Path):
@@ -480,6 +528,8 @@ def test_valid_byteqc_plan_is_manifest_only_and_contains_water4_argv(tmp_path: P
     assert plan["dry_run"] is True
     assert plan["would_submit"] is False
     assert plan["submission_argv"] is None
+    assert plan["audit_recomputation"]["exact_payload_match"] is True
+    assert plan["audit_recomputation"]["semantic_fields_match"] is True
     assert not output_dir.exists()
     argv = plan["job"]["benchmark_argv"]
     assert argv[argv.index("--case") + 1] == "water4-tz"
@@ -501,6 +551,37 @@ def test_plan_emits_no_argv_when_water2_or_capability_gate_failed(tmp_path: Path
     assert plan["w4_eligible"] is False
     assert "job" not in plan
     assert any("WATER2 audit" in reason for reason in plan["refusal_reasons"])
+
+
+def test_plan_recomputes_real_failed_result_and_rejects_tampered_flags(tmp_path: Path):
+    bundle = byteqc_fixture(tmp_path)
+    result = json.loads(Path(bundle["result"]).read_text())
+    result["status"] = "failed"
+    write_json(Path(bundle["result"]), result)
+    decision = run_byteqc_audit(bundle)
+    assert decision["w4_eligible"] is False
+
+    decision["water2_gate_passed"] = True
+    decision["water2_blocking_gates"] = []
+    decision["w4_eligible"] = True
+    decision["w4_blocking_gates"] = []
+    decision["w4_reasons"] = []
+    decision_path = write_json(tmp_path / "forged-decision.json", decision)
+    plan = gate.make_water4_plan(
+        decision_path=decision_path,
+        runner_path=bundle["runner"],
+        python_executable=Path(sys.executable),
+        run_id="forged-w4",
+        output_dir=tmp_path / "future-results",
+    )
+    assert plan["w4_eligible"] is False
+    assert "job" not in plan
+    assert plan["audit_recomputation"]["exact_payload_match"] is False
+    assert plan["audit_recomputation"]["semantic_fields_match"] is False
+    assert any(
+        "recomputed WATER2 audit did not pass" in reason
+        for reason in plan["refusal_reasons"]
+    )
 
 
 def test_plan_rechecks_input_hashes_and_runner_digest(tmp_path: Path):

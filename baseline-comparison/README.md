@@ -10,12 +10,15 @@
   必须与一份可验证的 GPU4PySCF canonical oracle 在显式误差阈值内一致，才允许
   生成 WATER4 的 Python runner argv。现有结果路径没有计时内的 normal
   checkpoint、final full-space residual，也没有证明与 V1 完全相同的轨道文件，
-  因此不计入 V1 完整 post-HF 的正式加速倍数。
+  且只有 commit 与选定文件 SHA、没有 immutable source-tree content SHA。因此
+  它保持 L1，不计入 V1 完整 post-HF 的正式加速倍数。
 - GANSU RI B-native 是 **I/L2 diagnostic**。它的公开计时边界是 RHF 到
   RI-RCCSD，且 release binary 没有可复现的 source-build attestation；它不能成为
-  V1 post-HF 正式加速基线。当前 pinned v2 runner 只支持 WATER2，所以 capability
-  manifest 会拒绝 WATER4 argv。若将来加入 WATER4 支持，必须用新 runner SHA
-  重新跑 WATER2 gate，不能沿用旧结果授权新代码。
+  V1 post-HF 正式加速基线。当前 pinned v2 result 只有 callback 推断收敛，未
+  提供 final observed residual/update norm；convergence gate 因此永久拒绝它从
+  WATER2 晋级。runner 也只支持 WATER2。若将来同时补齐 final convergence
+  measurement 与 WATER4 接口，必须用新 schema 和 runner SHA 重新跑 WATER2，
+  不能沿用旧结果授权新代码。
 
 无论软件类别，只要缺失正常 checkpoint 或最终 full-space residual，
 `formal_v1_post_hf_comparability.eligible` 就保持 `false`。
@@ -41,7 +44,9 @@
 `files.runtime_assets`。结果中的 Slurm Job ID、host、runner/input/native SHA、
 A100 UUID、PCIe Gen4 x16、NUMA 3、CPU 24–31、HBM 与 RSS 都会再次核对。
 PENDING、CANCELLED、缺 ExitCode、缺节点、NaN、Infinity 或任何不一致都会
-fail closed。
+fail closed。所有输入都按严格 JSON 解析，拒绝 `NaN`、`Infinity` 和
+`-Infinity` 这类非标准常量；每个几何行必须恰好是一个合法原子符号和三个有限
+JSON 数字。
 
 ## 审计 WATER2
 
@@ -63,14 +68,17 @@ python baseline-comparison/external_result_gate.py audit \
 ```
 
 GANSU 使用 `--software gansu` 和
-`gansu-runner-capabilities.v1.json`。合法的 GANSU WATER2 科学结果可以得到
-`water2_gate_passed=true`，但当前 runner capability 会给出
-`w4_eligible=false`，原因是 pinned runner 没有 WATER4 接口。
+`gansu-runner-capabilities.v1.json`。当前 v2 结果会保留为 I/L2 诊断记录，但
+由于没有 final observed convergence value，`water2_gate_passed=false` 且
+`w4_eligible=false`；runner capability 的 WATER4 拒绝是第二个独立阻断项。
 
 ## 生成 WATER4 dry-run manifest
 
-planner 会重新计算 audit ledger 中每个输入文件以及 runner 的 SHA-256。任何
-文件在 audit 后变化都拒绝生成 argv。
+planner 不信任 decision 里保存的 pass/fail 布尔值。它读取 decision 保存的精确
+software/tolerance 参数和 evidence paths，重新执行完整 audit，再比较新旧 decision
+的完整 payload digest 与所有语义字段；只有重算结果通过且完全一致时才继续。
+它还会重新计算每个输入文件以及 runner 的 SHA-256。任何文件在 audit 后变化，
+或手工篡改 decision 的 flags/reasons，都会拒绝生成 argv。
 
 ```bash
 python baseline-comparison/external_result_gate.py plan-water4 \
