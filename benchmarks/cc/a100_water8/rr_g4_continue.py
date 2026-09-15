@@ -30,6 +30,7 @@ INITIAL_CUTOFFS = (1e-9, 1e-11)
 TIGHTENING_FACTOR = 100.0
 ENERGY_TOLERANCE_EH = 1e-4
 PROJECTED_RESIDUAL_TOLERANCE = 1e-6
+PROJECTOR_ORTHOGONALITY_TOLERANCE = 1e-10
 HBM_LIMIT_MIB = 72 * 1024
 HOST_RSS_LIMIT_GIB = 110.0
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -89,14 +90,13 @@ def _exclusive_json(path: Path, payload: dict[str, Any]) -> None:
         payload, indent=2, sort_keys=True, ensure_ascii=True, allow_nan=False,
     ) + "\n").encode("utf-8")
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444)
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(encoded)
-            stream.flush()
-            os.fsync(stream.fileno())
-    except BaseException:
-        path.unlink(missing_ok=True)
-        raise
+    # Preserve a partial file if writing or fsync fails. Removing by pathname
+    # would create a TOCTOU window in which another process could replace this
+    # inode and have its write-once artifact deleted by our exception handler.
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(encoded)
+        stream.flush()
+        os.fsync(stream.fileno())
 
 
 def _is_below(path: Path, root: Path) -> bool:
@@ -657,7 +657,49 @@ def _projected_residual(record: Mapping[str, Any]) -> float | None:
         result = float(value)
     except (TypeError, ValueError):
         return None
-    return result if math.isfinite(result) else None
+    return result if math.isfinite(result) and result >= 0.0 else None
+
+
+def _finite_nonnegative(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(result) or result < 0.0:
+        return None
+    return result
+
+
+def _diagnostic_gate(
+    record: Mapping[str, Any],
+) -> tuple[dict[str, bool], dict[str, float | None]]:
+    method = record.get("method_metadata")
+    build = method.get("rr_projector_build") if isinstance(method, dict) else None
+    projector = build.get("projector") if isinstance(build, dict) else None
+    orthogonality = _finite_nonnegative(
+        projector.get("orthogonality_error")
+        if isinstance(projector, dict) else None
+    )
+    full_space = record.get("full_space_residual_diagnostic")
+    full_residual = _finite_nonnegative(
+        full_space.get("residual_norm")
+        if isinstance(full_space, dict) else None
+    )
+    checks = {
+        "projector_orthogonality_1e_10": orthogonality is not None
+        and orthogonality <= PROJECTOR_ORTHOGONALITY_TOLERANCE,
+        "full_space_diagnostic_recorded": isinstance(full_space, dict)
+        and full_space.get("available") is True
+        and full_space.get("execution_status") == "completed"
+        and full_residual is not None,
+    }
+    measurements = {
+        "projector_orthogonality_error": orthogonality,
+        "full_space_equation_residual_diagnostic": full_residual,
+    }
+    return checks, measurements
 
 
 def _gate(args: argparse.Namespace) -> int:
@@ -724,10 +766,10 @@ def _gate(args: argparse.Namespace) -> int:
         else None
     )
     projected = _projected_residual(record)
-    hbm = record.get("hbm", {}).get("peak_process_MiB")
-    rss = record.get("peak_host_RSS_GiB")
+    hbm = _finite_nonnegative(record.get("hbm", {}).get("peak_process_MiB"))
+    rss = _finite_nonnegative(record.get("peak_host_RSS_GiB"))
     checkpoint = record.get("checkpoint", {})
-    full_space = record.get("full_space_residual_diagnostic", {})
+    diagnostic_checks, diagnostic_measurements = _diagnostic_gate(record)
     checks = {
         "job_completed_0_0": evidence["terminal_slurm"]["state"] == "COMPLETED"
         and evidence["terminal_slurm"]["exit_code"] == "0:0",
@@ -737,14 +779,11 @@ def _gate(args: argparse.Namespace) -> int:
         and energy_error <= ENERGY_TOLERANCE_EH,
         "projected_equation_1e_6": projected is not None
         and projected <= PROJECTED_RESIDUAL_TOLERANCE,
-        "hbm_72_gib": isinstance(hbm, (int, float)) and hbm <= HBM_LIMIT_MIB,
-        "host_rss_110_gib": isinstance(rss, (int, float))
-        and rss <= HOST_RSS_LIMIT_GIB,
+        **diagnostic_checks,
+        "hbm_72_gib": hbm is not None and hbm <= HBM_LIMIT_MIB,
+        "host_rss_110_gib": rss is not None and rss <= HOST_RSS_LIMIT_GIB,
         "normal_checkpoint": isinstance(checkpoint, dict)
         and checkpoint.get("included_in_post_hf") is True,
-        "full_space_diagnostic_recorded": isinstance(full_space, dict)
-        and full_space.get("available") is True
-        and full_space.get("execution_status") == "completed",
     }
     scientific_pass = all(checks.values())
     candidate_iterations = _complete_iteration_timing(record)
@@ -794,10 +833,7 @@ def _gate(args: argparse.Namespace) -> int:
             "oracle_e_corr_eh": oracle_energy,
             "abs_delta_e_corr_eh": energy_error,
             "projected_equation_residual": projected,
-            "full_space_equation_residual_diagnostic": (
-                full_space.get("residual_norm") if isinstance(full_space, dict)
-                else None
-            ),
+            **diagnostic_measurements,
             "peak_process_hbm_mib": hbm, "peak_host_rss_gib": rss,
         },
         "performance_gate": performance,

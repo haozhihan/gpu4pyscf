@@ -688,12 +688,14 @@ subcommand, then submit and gate the matching converged point with both
 directory.
 
 Each gate treats the accuracy/rank sequence separately from performance. A
-candidate must pass energy, projected residual, resources, checkpoint, and
-diagnostic checks. WATER8 promotion additionally requires at least one passing
-candidate whose complete WATER4 CCSD-iteration time is lower than the paired
-canonical time. Whole post-HF speedup is recorded as a diagnostic. Thus an
-accurate but slower pair can complete the cutoff sequence but cannot authorize
-WATER8.
+candidate must pass energy, projected residual, projector orthogonality
+`<=1e-10`, resources, checkpoint, and diagnostic checks. The reconstructed
+full-space residual must be present, finite, and nonnegative; it remains a
+diagnostic and has no extra acceptance ceiling. WATER8 promotion additionally
+requires at least one passing candidate whose complete WATER4 CCSD-iteration
+time is lower than the paired canonical time. Whole post-HF speedup is recorded
+as a diagnostic. Thus an accurate but slower pair can complete the cutoff
+sequence but cannot authorize WATER8.
 
 Job 62676 separately compared the reference and GEMM ring paths for one
 deliberately non-converged WATER4 cycle at cutoff `1e-7`, rank 1495, and

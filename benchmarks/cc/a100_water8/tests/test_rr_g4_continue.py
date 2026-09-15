@@ -105,6 +105,86 @@ def test_complete_iteration_timing_supports_rr_and_canonical_records() -> None:
     assert rr_g4._complete_iteration_timing(canonical)["seconds"] == pytest.approx(2.45)
 
 
+def _diagnostic_record(orthogonality: object, residual: object) -> dict:
+    return {
+        "method_metadata": {
+            "rr_projector_build": {
+                "projector": {"orthogonality_error": orthogonality},
+            },
+        },
+        "full_space_residual_diagnostic": {
+            "available": True,
+            "execution_status": "completed",
+            "residual_norm": residual,
+        },
+    }
+
+
+def test_diagnostic_gate_accepts_orthogonal_projector_and_finite_residual() -> None:
+    checks, measurements = rr_g4._diagnostic_gate(
+        _diagnostic_record(1e-12, 1.25e4)
+    )
+    assert checks == {
+        "projector_orthogonality_1e_10": True,
+        "full_space_diagnostic_recorded": True,
+    }
+    assert measurements == {
+        "projector_orthogonality_error": 1e-12,
+        "full_space_equation_residual_diagnostic": 1.25e4,
+    }
+
+
+def test_projected_residual_norm_rejects_negative_value() -> None:
+    record = {"residual": {"projected_equation": -1e-12}}
+    assert rr_g4._projected_residual(record) is None
+    record["residual"]["projected_equation"] = 1e-12
+    assert rr_g4._projected_residual(record) == 1e-12
+
+
+@pytest.mark.parametrize(
+    "value", [True, False, float("nan"), float("inf"), -1.0, None],
+)
+def test_resource_scalar_rejects_bool_nonfinite_and_negative(value: object) -> None:
+    assert rr_g4._finite_nonnegative(value) is None
+
+
+@pytest.mark.parametrize("value", [None, float("nan"), float("inf"), -1e-14, 1.1e-10])
+def test_diagnostic_gate_rejects_invalid_or_nonorthogonal_projector(
+    value: object,
+) -> None:
+    checks, measurements = rr_g4._diagnostic_gate(
+        _diagnostic_record(value, 0.02)
+    )
+    assert checks["projector_orthogonality_1e_10"] is False
+    assert checks["full_space_diagnostic_recorded"] is True
+    if value != 1.1e-10:
+        assert measurements["projector_orthogonality_error"] is None
+
+
+@pytest.mark.parametrize("value", [None, float("nan"), float("inf"), -1e-14])
+def test_diagnostic_gate_rejects_invalid_full_space_residual(value: object) -> None:
+    checks, measurements = rr_g4._diagnostic_gate(
+        _diagnostic_record(1e-12, value)
+    )
+    assert checks["projector_orthogonality_1e_10"] is True
+    assert checks["full_space_diagnostic_recorded"] is False
+    assert measurements["full_space_equation_residual_diagnostic"] is None
+
+
+def test_write_once_failure_preserves_owned_inode(monkeypatch, tmp_path: Path) -> None:
+    output = tmp_path / "gate.json"
+
+    def fail_fsync(_descriptor: int) -> None:
+        raise OSError("injected fsync failure")
+
+    monkeypatch.setattr(rr_g4.os, "fsync", fail_fsync)
+    with pytest.raises(OSError, match="injected fsync failure"):
+        rr_g4._exclusive_json(output, {"gate": "partial"})
+    assert output.exists()
+    with pytest.raises(FileExistsError):
+        rr_g4._exclusive_json(output, {"gate": "replacement"})
+
+
 def _write_receipt_and_pin(tmp_path: Path, node: str = "compute-1-3") -> tuple[Path, Path]:
     task = tmp_path / "task"
     source = task / "snapshots" / ("a" * 64) / "source"
