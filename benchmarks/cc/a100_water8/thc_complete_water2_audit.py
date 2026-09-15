@@ -2023,7 +2023,7 @@ def _gint_runtime_options(
     return BENCHMARK._recorded_gint_runtime_options(
         runtime_args,
         source_state,
-        execution_mode='consumer-benchmark',
+        execution_mode='consumer-thc-complete-audit',
     )
 
 

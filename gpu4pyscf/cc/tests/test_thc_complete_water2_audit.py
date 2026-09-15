@@ -468,7 +468,7 @@ def test_selected_gint_runtime_options_reuse_recorded_source_contract(
     assert observed['runtime_args'].gint_column_backend == 'selected'
     assert observed['runtime_args'].gint_runtime_gate_receipt == receipt
     assert observed['source'] is source_state
-    assert observed['execution_mode'] == 'consumer-benchmark'
+    assert observed['execution_mode'] == 'consumer-thc-complete-audit'
 
     args.gint_column_backend = 'restricted-reference'
     assert audit_driver._gint_runtime_options(args, source_state) == {}

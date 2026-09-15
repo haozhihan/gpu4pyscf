@@ -100,9 +100,16 @@ RUNTIME_GATE_EXECUTION_MODES = frozenset({
     "release-gate",
     "consumer-benchmark",
     "consumer-counterpoise",
+    "consumer-thc-complete-audit",
 })
 _EXPECTED_RELEASE_PARTITION = "mrigpu"
-_EXPECTED_RELEASE_NODE = "compute-1-6"
+_ALLOWED_RELEASE_NODES = frozenset({
+    "compute-1-0",
+    "compute-1-2",
+    "compute-1-3",
+    "compute-1-5",
+    "compute-1-6",
+})
 _EXPECTED_RELEASE_AFFINITY = "24-31"
 _EXPECTED_RELEASE_NUMA_NODE = 3
 _PCI_SYSFS_DEVICES = Path("/sys/bus/pci/devices")
@@ -153,6 +160,27 @@ _RELEASE_ENVIRONMENT_NAMES = (
     "GPU4PYSCF_NUMA",
     "CCSD_SCONTROL_PATH",
 )
+
+
+def _release_node_contract_errors(runtime_contract: Any) -> list[str]:
+    """Validate a receipt-pinned qualification node without choosing one."""
+    if not isinstance(runtime_contract, Mapping):
+        return ["release pin runtime contract is unavailable"]
+
+    node = runtime_contract.get("node")
+    host = runtime_contract.get("host")
+    errors = []
+    if node not in _ALLOWED_RELEASE_NODES:
+        errors.append(
+            "qualification node is outside the approved MTU A100 nodes"
+        )
+    if host != node:
+        errors.append(
+            "qualification host differs from its pinned Slurm node"
+        )
+    return errors
+
+
 _SOURCE_SUFFIXES = {
     ".c", ".cc", ".cpp", ".cu", ".cuh", ".h", ".hpp", ".ini",
     ".json", ".md", ".py", ".pyx", ".pxd", ".sbatch", ".sh",
@@ -2356,10 +2384,7 @@ def _current_release_binding_errors(
             )
         ),
     }
-    if release_runtime_contract.get("node") != _EXPECTED_RELEASE_NODE:
-        errors.append("qualification node differs from fixed MTU node compute-1-6")
-    if release_runtime_contract.get("host") != _EXPECTED_RELEASE_NODE:
-        errors.append("qualification host differs from fixed MTU node compute-1-6")
+    errors.extend(_release_node_contract_errors(release_runtime_contract))
     for name, expected in expected_environment.items():
         if environment.get(name) != expected:
             errors.append(f"current release environment {name} mismatch")
@@ -2572,7 +2597,7 @@ def _current_consumer_binding_errors(
     release_runtime_contract: Any,
     loaded_job_id: Optional[str],
 ) -> list[str]:
-    """Validate a benchmark/CP consumer from current process observations.
+    """Validate a benchmark, CP, or THC-audit consumer from live evidence.
 
     Qualification evidence establishes the immutable B source, binary, ABI,
     transfer ledger, node, GPU, and NUMA contract.  Each consumer must still
@@ -2583,7 +2608,9 @@ def _current_consumer_binding_errors(
 
     errors: list[str] = []
     if execution_mode not in {
-        "consumer-benchmark", "consumer-counterpoise"
+        "consumer-benchmark",
+        "consumer-counterpoise",
+        "consumer-thc-complete-audit",
     }:
         return ["consumer runtime gate execution mode is invalid"]
     if not isinstance(observation, Mapping):
@@ -2685,7 +2712,7 @@ def _current_consumer_binding_errors(
                 errors.append(
                     "current benchmark topology is not the fixed task/results job path"
                 )
-        else:
+        elif execution_mode == "consumer-counterpoise":
             if (
                 consumer_topology_file is None
                 or consumer_topology_file.name
@@ -2700,6 +2727,18 @@ def _current_consumer_binding_errors(
                 )
             else:
                 expected_topology_file = consumer_topology_file
+        else:
+            expected_topology_file = (
+                release_task_root
+                / "results"
+                / "thc-complete-water2-audit"
+                / f"topology-physical8-{job_id}.json"
+            )
+            if consumer_topology_file != expected_topology_file:
+                errors.append(
+                    "current THC complete audit topology is not the fixed "
+                    "task/results job path"
+                )
 
     expected_environment = {
         "SLURM_JOB_NODELIST": release_runtime_contract.get("node"),
@@ -2719,10 +2758,7 @@ def _current_consumer_binding_errors(
             )
         ),
     }
-    if release_runtime_contract.get("node") != _EXPECTED_RELEASE_NODE:
-        errors.append("qualification node differs from fixed MTU node compute-1-6")
-    if release_runtime_contract.get("host") != _EXPECTED_RELEASE_NODE:
-        errors.append("qualification host differs from fixed MTU node compute-1-6")
+    errors.extend(_release_node_contract_errors(release_runtime_contract))
     for name, expected in expected_environment.items():
         if environment.get(name) != expected:
             errors.append(f"current consumer environment {name} mismatch")
@@ -2856,15 +2892,20 @@ def _current_consumer_binding_errors(
     ):
         errors.append("current consumer memory policy differs from release pin")
 
-    script_name = (
-        "benchmark.py"
-        if execution_mode == "consumer-benchmark" else "counterpoise.py"
-    )
-    launcher_name = (
-        "run_mtu_benchmark.sbatch"
-        if execution_mode == "consumer-benchmark"
-        else "run_mtu_counterpoise.sbatch"
-    )
+    script_name, launcher_name = {
+        "consumer-benchmark": (
+            "benchmark.py",
+            "run_mtu_benchmark.sbatch",
+        ),
+        "consumer-counterpoise": (
+            "counterpoise.py",
+            "run_mtu_counterpoise.sbatch",
+        ),
+        "consumer-thc-complete-audit": (
+            "thc_complete_water2_audit.py",
+            "run_mtu_thc_complete_water2_audit.sbatch",
+        ),
+    }[execution_mode]
     expected_script = (
         release_source_root / "benchmarks" / "cc" / "a100_water8" / script_name
         if release_source_root is not None else None
@@ -2919,7 +2960,8 @@ def validate_runtime_performance_gate(
     if execution_mode not in RUNTIME_GATE_EXECUTION_MODES:
         raise ValueError(
             "runtime gate execution_mode must be release-gate, "
-            "consumer-benchmark, or consumer-counterpoise"
+            "consumer-benchmark, consumer-counterpoise, or "
+            "consumer-thc-complete-audit"
         )
     binding_contract = {
         "schema": "gpu4pyscf.gint-selected-runtime-gate-binding.v2",

@@ -1803,6 +1803,23 @@ def _configure_consumer_evidence(
             task / "results" / "counterpoise" / "candidate"
             / f"topology-physical8-{job_id}.json"
         )
+    elif mode == "consumer-thc-complete-audit":
+        job_name = "thc-water2-complete-audit"
+        driver = (
+            source
+            / "benchmarks/cc/a100_water8/thc_complete_water2_audit.py"
+        )
+        launcher = (
+            source
+            / "benchmarks/cc/a100_water8"
+            / "run_mtu_thc_complete_water2_audit.sbatch"
+        )
+        topology_path = (
+            task
+            / "results"
+            / "thc-complete-water2-audit"
+            / f"topology-physical8-{job_id}.json"
+        )
     else:  # pragma: no cover - helper callers are exhaustive
         raise AssertionError(mode)
     topology.update({
@@ -1884,7 +1901,12 @@ def _configure_consumer_evidence(
 
 
 @pytest.mark.parametrize(
-    "mode", ("consumer-benchmark", "consumer-counterpoise")
+    "mode",
+    (
+        "consumer-benchmark",
+        "consumer-counterpoise",
+        "consumer-thc-complete-audit",
+    ),
 )
 def test_qualified_release_unlocks_strict_current_consumer(
     tmp_path: Path, mode: str,
@@ -1901,6 +1923,45 @@ def test_qualified_release_unlocks_strict_current_consumer(
     assert accepted["execution_mode"] == mode
     assert accepted["binding_contract"]["execution_mode"] == mode
     assert accepted["validation_errors"] == []
+
+
+@pytest.mark.parametrize(
+    "node",
+    (
+        "compute-1-0",
+        "compute-1-2",
+        "compute-1-3",
+        "compute-1-5",
+        "compute-1-6",
+    ),
+)
+def test_release_node_contract_accepts_only_explicit_mtu_a100_nodes(
+    node: str,
+) -> None:
+    assert GINT_AUDIT._release_node_contract_errors({
+        "node": node,
+        "host": node,
+    }) == []
+
+
+@pytest.mark.parametrize(
+    ("contract", "reason"),
+    (
+        (
+            {"node": "compute-9-9", "host": "compute-9-9"},
+            "outside the approved MTU A100 nodes",
+        ),
+        (
+            {"node": "compute-1-2", "host": "compute-1-3"},
+            "host differs from its pinned Slurm node",
+        ),
+    ),
+)
+def test_release_node_contract_rejects_unapproved_or_mismatched_host(
+    contract: dict[str, str], reason: str,
+) -> None:
+    errors = GINT_AUDIT._release_node_contract_errors(contract)
+    assert any(reason in error for error in errors)
 
 
 @pytest.mark.parametrize(
@@ -1925,6 +1986,16 @@ def test_qualified_release_unlocks_strict_current_consumer(
             "consumer-counterpoise",
             "live-affinity",
             "CPU affinity is not 24-31",
+        ),
+        (
+            "consumer-thc-complete-audit",
+            "controller-command",
+            "did not launch snapshot B consumer",
+        ),
+        (
+            "consumer-thc-complete-audit",
+            "topology-directory",
+            "THC complete audit topology is not the fixed task/results job path",
         ),
     ),
 )
