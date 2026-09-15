@@ -579,8 +579,8 @@ projected-equation, HBM, and host-RSS gates. The full-space residual remains an
 approximation diagnostic. Job 62673 ran on development node `compute-1-3` with
 `performance_eligible=false`, so its timing selects neither a fixed-node
 speedup nor a 10x result. These two candidates advanced to the converged
-WATER4 accuracy and iteration-speed gate; job 62674 below records its terminal
-result. The eight-monomer ghost-basis
+WATER4 accuracy and iteration-speed gate; job 62674 below rejects both of them
+but does not reach the route-level rank stop boundary. The eight-monomer ghost-basis
 counterpoise validation applies later to WATER8 candidates that pass that gate.
 
 Job 62674 is the resulting direct-CD WATER4 grid from source `77a1b7c` on
@@ -605,10 +605,95 @@ records are slower. Both include their normal checkpoints. The batch ended
 failures, while the process-failure count was zero. The synchronized summary
 SHA-256 is
 `dba812b465f32f490090cb3a813e413648080535b6441d6839af69d75e913428`.
-The WATER4 stop rule therefore ends this RR candidate route, and no RR WATER8
-or eight-ghost-monomer counterpoise job will be submitted from these cutoffs.
-The failed energy gate already forces that decision, independent of any future
-exact Wvvvv kernel fusion.
+The failed energy gate rejects these two cutoffs and forbids submitting RR
+WATER8 or eight-ghost-monomer counterpoise from either one. It does not stop the
+RR route: the declared boundary is `0.8 * OV = 0.8 * 4240 = 3392`, while the
+largest measured rank is only 1914. The original contract therefore requires
+actual WATER4 ranks at `1e-9` and `1e-11`, followed by converged runs until the
+first passing cutoff plus its next tighter point is complete, or until accuracy
+still fails at rank at least 3392. Exact Wvvvv kernel fusion cannot retroactively
+qualify the rejected 1e-7/1e-8 energies.
+
+### Receipt-bound G4 WATER4 continuation
+
+The selected-GINT receipt does not authorize an arbitrary Slurm wrapper. It
+binds each consumer to the exact qualification node, the standard
+`run_mtu_benchmark.sbatch` command, its `benchmark.py` driver, and
+`results/topology/physical8-benchmark-${SLURM_JOB_ID}.json`. Therefore
+`submit_mtu_rr_g4_water4.sh` is a login-node submitter, not an allocation
+launcher. It derives the node from both the sealed receipt and release pin,
+then calls the standard launcher with explicit `--nodes=1 --ntasks=1` and one
+GPU. A command-line `--nodelist` overrides the standard script's default with
+the receipt-pinned node; this permits any already-qualified allowed MTU A100
+node without weakening the runtime gate.
+
+First submit a paired canonical oracle and the two one-cycle rank probes from a
+new release-B snapshot. The probes deliberately end `FAILED/1:0` after writing
+their `status=not_converged`, one-cycle records; the canonical job must end
+`COMPLETED/0:0`.
+
+```bash
+export CCSD_SOURCE_ROOT=/mnt/mridata/vxu/thu-likun/hanhaozhi/agent-ccsd-a100-thc-rr-20260913/snapshots/RELEASE_B_SHA256/source
+export GINT_RUNTIME_GATE_RECEIPT=/mnt/mridata/vxu/thu-likun/hanhaozhi/agent-ccsd-a100-thc-rr-20260913/results/GINT_RECEIPT_DIR/receipt.json
+export G4_STAGE=spectrum
+export G4_RUN_ID=g4-water4-RELEASE_B_SHORT_SHA
+"${CCSD_SOURCE_ROOT}/benchmarks/cc/a100_water8/submit_mtu_rr_g4_water4.sh"
+```
+
+After all three allocation rows are terminal, create the write-once spectrum
+summary. Replace `RUN_DIR` with the output path printed by the submitter.
+
+```bash
+TASK=/mnt/mridata/vxu/thu-likun/hanhaozhi/agent-ccsd-a100-thc-rr-20260913
+PYTHON=/mnt/mridata/vxu/thu-likun/hanhaozhi/agent-ccsd-baseline-20260913/.venv/bin/python
+RUN_DIR="${TASK}/results/rr-g4-water4/${G4_RUN_ID}-spectrum"
+"${PYTHON}" \
+  "${CCSD_SOURCE_ROOT}/benchmarks/cc/a100_water8/rr_g4_continue.py" spectrum \
+  --task-root "${TASK}" --source-root "${CCSD_SOURCE_ROOT}" \
+  --gint-runtime-gate-receipt "${GINT_RUNTIME_GATE_RECEIPT}" \
+  --oracle-record "${RUN_DIR}/water4-tz__canonical__r${G4_RUN_ID}-oracle.json" \
+  --probe-record "${RUN_DIR}/water4-tz__rr_cd__r${G4_RUN_ID}-rank-1e9.json" \
+  --probe-record "${RUN_DIR}/water4-tz__rr_cd__r${G4_RUN_ID}-rank-1e11.json" \
+  --output "${RUN_DIR}/spectrum-summary.json"
+```
+
+Submit and gate the first converged point. The standard launcher keeps normal
+checkpointing and requests the reconstructed full-space diagnostic outside
+post-HF timing.
+
+```bash
+export G4_STAGE=converge
+export G4_RUN_ID=g4-water4-1e9-RELEASE_B_SHORT_SHA
+export G4_RR_EIG_CUTOFF=1e-9
+export G4_SPECTRUM_SUMMARY="${RUN_DIR}/spectrum-summary.json"
+unset G4_PREVIOUS_GATE G4_PROBE_SUMMARY
+"${CCSD_SOURCE_ROOT}/benchmarks/cc/a100_water8/submit_mtu_rr_g4_water4.sh"
+
+RUN_1E9="${TASK}/results/rr-g4-water4/${G4_RUN_ID}-converge"
+"${PYTHON}" \
+  "${CCSD_SOURCE_ROOT}/benchmarks/cc/a100_water8/rr_g4_continue.py" gate \
+  --task-root "${TASK}" --source-root "${CCSD_SOURCE_ROOT}" \
+  --gint-runtime-gate-receipt "${GINT_RUNTIME_GATE_RECEIPT}" \
+  --rr-eig-cutoff 1e-9 --spectrum-summary "${G4_SPECTRUM_SUMMARY}" \
+  --rr-record "${RUN_1E9}/water4-tz__rr_cd__r${G4_RUN_ID}-rr.json" \
+  --output "${RUN_1E9}/g4-gate.json"
+```
+
+If that gate says `requires_tighter=true`, repeat `converge` at `1e-11` with
+`G4_PREVIOUS_GATE=${RUN_1E9}/g4-gate.json`, then pass the same path as
+`--previous-gate` to `gate`. If `1e-11` still requires a tighter cutoff, submit
+that exact `next_cutoff` with `G4_STAGE=probe`; summarize it with the `probe`
+subcommand, then submit and gate the matching converged point with both
+`G4_PREVIOUS_GATE` and `G4_PROBE_SUMMARY`. Never skip a gate or reuse a run
+directory.
+
+Each gate treats the accuracy/rank sequence separately from performance. A
+candidate must pass energy, projected residual, resources, checkpoint, and
+diagnostic checks. WATER8 promotion additionally requires at least one passing
+candidate whose complete WATER4 CCSD-iteration time is lower than the paired
+canonical time. Whole post-HF speedup is recorded as a diagnostic. Thus an
+accurate but slower pair can complete the cutoff sequence but cannot authorize
+WATER8.
 
 Job 62676 separately compared the reference and GEMM ring paths for one
 deliberately non-converged WATER4 cycle at cutoff `1e-7`, rank 1495, and

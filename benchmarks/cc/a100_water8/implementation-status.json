@@ -1,10 +1,10 @@
 {
   "schema": "gpu4pyscf.water8.implementation-status.v2",
-  "as_of_utc": "2026-09-14T16:36:58Z",
+  "as_of_utc": "2026-09-15T04:21:32Z",
   "purpose": "Candid implementation and MTU evidence ledger for the fixed WATER27 H2O8d2d single-A100 CCSD project.",
   "claim_policy": {
     "ten_x_claim_allowed": false,
-    "reason": "The exact-node canonical denominator is established and both RR cutoffs pass WATER2, but both converged WATER4 candidates fail the 1e-4 Eh correlation-energy gate and are slower than canonical, so the RR WATER4 stop rule forbids WATER8. The WATER4 one-cycle backend A/B is development-only, FNO also stopped at WATER4, no WATER8 candidate or eight-monomer counterpoise result exists, and every THC production/performance flag remains false. Commit 30ddc82 has only exact local Wvvvv algebra/workspace evidence; its A100 gates remain pending and it carries no speed claim.",
+    "reason": "The exact-node canonical denominator is established and both RR cutoffs pass WATER2, but the converged WATER4 cutoffs 1e-7/rank 1495 and 1e-8/rank 1914 fail the 1e-4 Eh correlation-energy gate and are slower than canonical, so those candidates cannot enter WATER8. Their ranks are below the contractual 0.8*OV boundary of 3392, so job 62674 does not stop the RR route; actual 1e-9/1e-11 WATER4 ranks and adaptive converged gates remain required. The WATER4 one-cycle backend A/B is development-only, FNO stopped at WATER4, no WATER8 candidate or eight-monomer counterpoise result exists, and every THC production/performance flag remains false. Commit 30ddc82 has only exact local Wvvvv algebra/workspace evidence; its A100 gates remain pending and it carries no speed claim.",
     "evidence_states": [
       "source_reported",
       "local_measured",
@@ -18,7 +18,7 @@
     "frozen_baseline_commit": "a89b3ae018d4e82968323ef95645d91adde294aa",
     "feature_worktree": "analysis/research/ccsd/gpu4pyscf-a100-thc-rr",
     "g0_worktree": "analysis/research/ccsd/gpu4pyscf-g0-baseline",
-    "feature_source_state": "rr-water4-stop-thc-full-pair-total-identity-portable-snapshot-validation-and-fused-wvvvv-development",
+    "feature_source_state": "rr-water4-tight-cutoff-continuation-thc-full-pair-total-identity-portable-snapshot-validation-and-fused-wvvvv-development",
     "feature_performance_eligible": false,
     "feature_head_before_ledger_update": "30ddc82a33eae34b4df79e634132bbff85a66049",
     "merged_implementation_commits": {
@@ -439,8 +439,8 @@
       "id": "G4",
       "name": "rr-ccsd",
       "evidence_state": "local_measured",
-      "state": "water4-stop-rule-triggered-both-rr-candidates-fail-energy-no-water8",
-      "decision": "stop-current-rr-route-at-water4-and-do-not-submit-water8-or-counterpoise",
+      "state": "water4-1e-7-and-1e-8-rejected-water8-blocked-route-stop-boundary-not-reached",
+      "decision": "continue-water4-rank-first-at-1e-9-and-1e-11-then-adapt-until-first-pass-plus-next-tighter-or-rank-3392-failure",
       "method_class": "controlled-approximation",
       "acceptance_table": "A",
       "implemented": [
@@ -456,7 +456,8 @@
         "Job 62673 converges direct-CD WATER2 at cutoffs 1e-7/rank 604 and 1e-8/rank 719 with auxiliary/virtual blocks 32; both pass energy, projected-equation, HBM, host-RSS, checkpoint, and scheduler development gates.",
         "Commit 64d6c55 selects the bounded ordinary crossed-ring GEMM chain independently for each full or tail tile, admitting right-project-first only when it reduces scalar multiplies without exceeding the residual-first temporary peak; the fourth Wvovo chain stays separate.",
         "Job 62676 validates reference versus GEMM for one non-converged WATER4 cycle at rank 1495 and auxiliary/virtual blocks 32; the sub-5% tie selects GEMM/cuBLAS for the next converged run but remains performance-ineligible.",
-        "Job 62674 converges both direct-CD WATER4 candidates, but cutoff 1e-7/rank 1495 has 5.26532e-4 Eh correlation error and cutoff 1e-8/rank 1914 has 1.1056808544962493e-4 Eh error; both fail the 1e-4 Eh gate and are slower than the 35.569 s canonical observation, triggering the WATER4 stop rule.",
+        "Job 62674 converges both direct-CD WATER4 candidates, but cutoff 1e-7/rank 1495 has 5.26532e-4 Eh correlation error and cutoff 1e-8/rank 1914 has 1.1056808544962493e-4 Eh error; both fail the 1e-4 Eh gate, are slower than the 35.569 s canonical observation, and are rejected from WATER8. Because both ranks are below 3392 = 0.8*4240, this does not satisfy the route-level RR stop rule.",
+        "The receipt-bound G4 submitter derives the exact node from the receipt and release pin, invokes only the standard benchmark launcher with one node and one GPU, and the write-once validator records a shared-orbital WATER4 canonical oracle plus actual 1e-9/1e-11 ranks before permitting sequential converged points. Accuracy-sequence completion and complete-iteration acceleration are independent gates; an accurate but slower pair cannot promote to WATER8.",
         "Commit 30ddc82 fuses the two exact projected Wvvvv ladders with a symmetric bilinear identity, caps fused auxiliary subblocks so two live rank-square transforms remain within the prior one-transform allowance, and records the logical workspace; singleton tails retain the sequential path."
       ],
       "local_verification": {
@@ -998,8 +999,24 @@
             "normal_checkpoint_included": true,
             "checkpoint_sha256": "f336a1d82507915bdc34da4fe5cc0a3890cb4f28e5ed4ba05faf9131db3bdced"
           },
+          "contract_interpretation": {
+            "pair_dimension": 4240,
+            "rank_stop_fraction": 0.8,
+            "rank_stop_boundary": 3392,
+            "largest_measured_rank": 1914,
+            "largest_measured_rank_fraction": 0.4514150943396226,
+            "rank_stop_boundary_reached": false,
+            "route_stop_rule_satisfied": false,
+            "job_62674_candidates_rejected": true,
+            "water8_promotion_blocked": true,
+            "required_initial_continuation_cutoffs": [
+              1e-09,
+              1e-11
+            ],
+            "continuation_rule": "record actual ranks first; run converged cutoffs in order until the first passing point plus its next tighter point, or stop only after an accuracy failure at rank >=3392"
+          },
           "canonical_post_hf_seconds": 35.569218166172504,
-          "decision": "both candidates fail WATER4 energy and complete-iteration speed; stop the RR route and do not submit WATER8 or eight-ghost-monomer counterpoise",
+          "decision": "both candidates fail WATER4 energy and complete-iteration speed and cannot enter WATER8; continue WATER4 at tighter ranks because 1495 and 1914 are below the route-stop boundary 3392",
           "canonical_e_corr_eh": -1.139363602800037,
           "result": "results/mtu/development-rr-cd-galerkin-a32-water4/77a1b7c4-62674/development-summary.json",
           "sha256": "dba812b465f32f490090cb3a813e413648080535b6441d6839af69d75e913428",
@@ -1029,12 +1046,14 @@
         "Jobs 62654 and 62656 are one-cycle development profiles whose Slurm wrappers failed by expecting exit code 5 instead of the benchmark's deliberate non-convergence code 1; their complete measurements remain performance-ineligible and cannot predict converged runtime.",
         "Job 62676 selects GEMM/cuBLAS under the declared sub-5% tie rule, but it is one non-converged WATER4 cycle and cannot predict complete-iteration runtime.",
         "Job 62674 produces two converged WATER4 records with no process failures, but both fail the energy gate and are slower than canonical; the batch's FAILED 2:0 state is the deliberate two-failure scientific summary gate.",
+        "Job 62674 rejects only the tested 1e-7 and 1e-8 candidates. Its largest rank 1914 is below 3392 = 0.8*OV, so it cannot be used as evidence that the RR route-level stop condition has been reached.",
         "The bounded-memory ring paths remain performance-ineligible.",
         "Commit 30ddc82 passes exact local algebra and workspace tests, but has no A100 numerical, allocation, or performance result; it cannot qualify either job 62674 cutoff because both already fail WATER4 energy."
       ],
       "missing": [
         "A100 numerical, allocation, and performance validation of the exact fused Wvvvv kernel, without treating it as a remedy for the rejected job 62674 cutoffs",
-        "A materially revised RR method or rank construction that first passes WATER2 and then WATER4 correlation-energy, projected-equation, resource, and complete-iteration speed gates before any WATER8 work"
+        "Actual WATER4 projector ranks for cutoffs 1e-9 and 1e-11 from one receipt-bound release-B snapshot and shared canonical orbitals",
+        "Sequential converged WATER4 cutoffs until the first accuracy pass plus its next tighter point, or an accuracy failure at rank >=3392; WATER8 remains blocked until this gate closes"
       ]
     },
     {
@@ -2367,7 +2386,7 @@
         },
         "canonical_e_corr_eh": -1.139363602800037
       },
-      "decision": "trigger WATER4 stop rule; do not submit RR WATER8 or eight-ghost-monomer counterpoise from these cutoffs",
+      "decision": "reject these two cutoffs and block RR WATER8 or eight-ghost-monomer counterpoise; continue tighter WATER4 ranks because the 3392 route-stop boundary was not reached",
       "result": "results/mtu/development-rr-cd-galerkin-a32-water4/77a1b7c4-62674/development-summary.json",
       "result_sha256": "dba812b465f32f490090cb3a813e413648080535b6441d6839af69d75e913428",
       "summary_sha256_locally_verified": true
@@ -2705,7 +2724,7 @@
           "advance_to_water8": false
         }
       ],
-      "job_62674_terminal_gate": {
+      "job_62674_candidate_rejection_gate": {
         "scheduler_state": "FAILED",
         "exit_code": "2:0",
         "scientific_gate_failure_count": 2,
@@ -2725,8 +2744,19 @@
         "policy_choice": "gemm-cublas-because-difference-is-below-5-percent",
         "performance_eligible": false
       },
-      "decision": "both promoted RR candidates fail WATER4 energy and complete-iteration speed; trigger the stop rule and submit no RR WATER8 or eight-ghost-monomer counterpoise job",
-      "limitations": "Job 62674 is a synchronized non-fixed-node development grid and job 62676 is one non-converged cycle. Neither provides fixed-node performance evidence, a passing WATER4 candidate, WATER8 evidence, or counterpoise evidence."
+      "rank_stop_contract": {
+        "pair_dimension": 4240,
+        "rank_stop_boundary": 3392,
+        "largest_measured_rank": 1914,
+        "boundary_reached": false,
+        "route_stop_rule_satisfied": false,
+        "next_rank_probes": [
+          1e-09,
+          1e-11
+        ]
+      },
+      "decision": "reject the 1e-7 and 1e-8 candidates and block RR WATER8; continue WATER4 rank-first at 1e-9 and 1e-11, then adapt until first pass plus next tighter or a failing rank >=3392",
+      "limitations": "Job 62674 is a synchronized non-fixed-node development grid and job 62676 is one non-converged cycle. Neither provides fixed-node performance evidence, a passing WATER4 candidate, WATER8 evidence, or counterpoise evidence. Job 62674 also does not reach the rank-based route-stop boundary."
     },
     "portable_snapshot_cross_client_validation": {
       "evidence_state": "source_reported",
@@ -2856,8 +2886,8 @@
       {
         "record": "job-62674-rr-cd-water4-grid",
         "role": "direct-CD RR WATER4 accuracy and complete-iteration gate",
-        "status": "both-cutoffs-energy-and-speed-fail-stop-rule-triggered",
-        "reason": "Cutoff 1e-7/rank 1495 and cutoff 1e-8/rank 1914 pass projected residual and resource checks but miss the 1e-4 Eh correlation-energy limit at 0.000526532228549037 and 0.00011056808544962493 Eh; their post-HF times of 1049.7786670327187 and 1366.4721752461046 s also exceed the paired 35.569218166172504 s canonical observation.",
+        "status": "both-cutoffs-rejected-water8-blocked-route-stop-boundary-not-reached",
+        "reason": "Cutoff 1e-7/rank 1495 and cutoff 1e-8/rank 1914 pass projected residual and resource checks but miss the 1e-4 Eh correlation-energy limit at 0.000526532228549037 and 0.00011056808544962493 Eh; their post-HF times of 1049.7786670327187 and 1366.4721752461046 s also exceed the paired 35.569218166172504 s canonical observation. Both ranks are below 3392 = 0.8*4240, so the tested candidates are rejected but the route-level stop condition is not met.",
         "formal_accuracy_eligible": false,
         "target_speed_claim_eligible": false
       },
@@ -2939,7 +2969,7 @@
     {
       "evidence_state": "local_measured",
       "statement": "Job 62674 converged both promoted RR-CD WATER4 candidates: cutoff 1e-7/rank 1495 misses the energy gate by a wide margin, while cutoff 1e-8/rank 1914 narrowly misses it at 1.1056808544962493e-4 Eh; both are much slower than the paired 35.569 s canonical observation.",
-      "claim_limit": "The batch ended FAILED 2:0 only because the deliberate scientific summary gate counted two failures; no process failed. This non-fixed-node development result triggers the WATER4 stop rule and supplies no WATER8, counterpoise, fixed-node, or 10x evidence.",
+      "claim_limit": "The batch ended FAILED 2:0 only because the deliberate scientific summary gate counted two failures; no process failed. It rejects those candidates and blocks WATER8, but ranks 1495/1914 are below the contractual 3392 boundary and therefore do not stop the RR route. It supplies no WATER8, counterpoise, fixed-node, or 10x evidence.",
       "evidence": "results/mtu/development-rr-cd-galerkin-a32-water4/77a1b7c4-62674/development-summary.json",
       "sha256": "dba812b465f32f490090cb3a813e413648080535b6441d6839af69d75e913428"
     },
@@ -2975,7 +3005,7 @@
     ],
     "accuracy_qualified_candidate_count": 0,
     "g1_single_ab_observation_seconds": 869.2149962764233,
-    "reason": "The exact-node canonical denominator is complete. G1 remains one equation-preserving A/B observation and FNO stopped at WATER4. RR cutoffs 1e-7 and 1e-8 pass WATER2, but both converged WATER4 candidates fail the 1e-4 Eh energy gate and complete-iteration speed gate, so the RR stop rule forbids WATER8 promotion. Job 62676 only selects GEMM/cuBLAS under the tie rule from one non-converged WATER4 cycle. No WATER8 candidate or eight-monomer counterpoise result exists. THC passes the exact full-pair total-identity fixture, while its literal Eq. 35 and all production/performance gates remain false. The post-result fused Wvvvv kernel at 30ddc82 has passed only local exact/workspace tests and has no A100 speed evidence."
+    "reason": "The exact-node canonical denominator is complete. G1 remains one equation-preserving A/B observation and FNO stopped at WATER4. RR cutoffs 1e-7 and 1e-8 pass WATER2, but both converged WATER4 candidates fail the 1e-4 Eh energy gate and complete-iteration speed gate, so those cutoffs cannot enter WATER8. Their ranks 1495/1914 are below the 3392 route-stop boundary; the RR route remains incomplete pending actual 1e-9/1e-11 ranks and sequential converged gates. Job 62676 only selects GEMM/cuBLAS under the tie rule from one non-converged WATER4 cycle. No WATER8 candidate or eight-monomer counterpoise result exists. THC passes the exact full-pair total-identity fixture, while its literal Eq. 35 and all production/performance gates remain false. The post-result fused Wvvvv kernel at 30ddc82 has passed only local exact/workspace tests and has no A100 speed evidence."
   },
   "artifact_inventory": {
     "path_from_workspace_root": "output/water8-ccsd-implementation-artifacts.sha256",
@@ -3013,8 +3043,9 @@
       "Treat cancelled jobs 62614 and 62615 as superseded; any resumed formal GINT qualification requires a new portable-validator snapshot and dependency chain.",
       "Do not run WATER8 FNO: jobs 62630-62633 triggered the WATER4 stop rule.",
       "Do not run WATER8 RR or its eight-ghost-monomer counterpoise from the job 62674 cutoffs; both promoted candidates failed WATER4 energy and complete-iteration speed.",
+      "Continue G4 on WATER4: first record actual ranks at 1e-9 and 1e-11 from a receipt-bound release-B snapshot, then run converged cutoffs in order until the first pass plus its next tighter point or an accuracy failure at rank >=3392.",
       "Validate commit 30ddc82 fused Wvvvv numerics and logical allocation accounting on A100 before any kernel performance statement; the job 62674 energy failures still forbid WATER8 promotion.",
-      "Use the job 62676 GEMM/cuBLAS tie decision only if a materially revised RR method returns to backend testing; do not extrapolate its one-cycle timing.",
+      "Use the job 62676 GEMM/cuBLAS tie decision for the receipt-bound WATER4 continuation, but retain its one-cycle timing as development-only and do not extrapolate it.",
       "Keep the pair-symmetrized from-zero complete THC audit graph, Algorithms 4-10, F-hat, MP2 weights, and weighted ERI-THC preprocessing outside the production driver until the literal Algorithm 7 Eq. 35 convention is resolved and inexact WATER2/WATER4 equation comparisons pass.",
       "Treat completed job 62635 as a development bottleneck record only: cutoff 1e-5 fails energy and must not advance to WATER4.",
       "Use job 62652 only as the full-rank canonical-ERI correctness endpoint; it does not qualify any reduced-rank or direct-CD candidate.",
