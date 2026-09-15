@@ -3,15 +3,23 @@
 This note fixes the algebraic boundary for replacing the validation-only
 THC-RR residual with a reduced-scaling implementation.  The primary source is
 Hohenstein *et al.*, *J. Chem. Phys.* **156**, 054102 (2022),
-[arXiv:2111.11473](https://arxiv.org/abs/2111.11473).  Equation and algorithm
-numbers below refer to that paper.
+[DOI 10.1063/5.0077770](https://doi.org/10.1063/5.0077770).
+[arXiv:2111.11473v1](https://arxiv.org/abs/2111.11473) is retained as a
+versioned preprint, not as the final equation authority. Equation numbers
+below state explicitly whether they refer to the preprint or the published
+article because the final article both renumbered and corrected the Omega-D
+equation.
 
-This ledger is current through commit `7399a87`. It distinguishes the existing
+This ledger includes the published-equation audit at commit `1a9eeb3`. It
+distinguishes the existing
 Algorithms 1--3 hybrid, the independently audited Algorithms 4--10/F-hat
 components, and the from-zero complete audit assembler. The exact full-pair
 total residual now agrees with the independent RR/CD oracle after one physical
-pair symmetrization of Algorithm 7. The printed Eq. 35 mapping remains
-unresolved. No direct-paper Algorithms 1--10 path is enabled in the iterative
+pair symmetrization of Algorithm 7. A later primary-source audit found that
+the final JCP article corrected the disputed arXiv-v1 Eq. 35. The corrected
+published Eq. 36 identity now passes one-dimensional, nontrivial physical-pair,
+independent scalar-loop, and exact full-pair regressions. No direct-paper
+Algorithms 1--10 path is enabled in the iterative
 production driver, and every complete, accepted, formal, production, and
 performance flag remains false.
 
@@ -45,7 +53,7 @@ paper's direct complement uses:
 |---|---|---|---|
 | Algorithms 4--5 | Eq. 32 Omega-A and Eq. 33 Omega-C quadratic doubles terms | Two-index-slice O(N^5) GEMM reference | Each raw projected contribution agrees with a dense Eq. 32/33 reference |
 | Algorithm 6 | Joint O(N^4) form of Eqs. 32--33 | Python/CuPy GEMM audit endpoint; custom CUDA remains a later performance step | Agrees with the O(N^5) implementation and wins end-to-end on WATER4 |
-| Algorithm 7 | Omega-D contribution and explicit spurious-term removal | Blocked audit endpoint for Eq. 36, Eq. 37, and Appendix line 22 | Joint Omega-C plus Omega-D oracle proves the paper's stated cancellation |
+| Algorithm 7 | Omega-D contribution and explicit spurious-term removal | Audit endpoint for published Eq. 36, Eq. 37, Eq. 38, and Appendix line 19; arXiv-v1 Eq. 35 is a legacy diagnostic | Published Eq. 36 agrees with Eq. 38 plus line 19 in the physical full-pair gauge; later molecular and production gates remain separate |
 | Algorithms 8--10 | Singles and remaining Omega-E/G/H/I/J terms | NumPy/CuPy audit contractions in paper order | Independent F-hat construction and complete singles/doubles residuals agree separately |
 
 Algorithms 4--7 require only the `ovov` class of ERIs in the paper's THC form,
@@ -99,31 +107,85 @@ assemble_complete_thc_ccsd_audit(
 ```
 
 Algorithms 4--6 return an `(amplitude_thc_rank, amplitude_thc_rank)` raw
-projected residual contribution. Algorithm 7 returns its Eq. 36 `R`, exchange
-`S`, Eq. 37 main term, signed spurious-removal term, and Appendix line-22 sum
-separately. They are audit-only until all coefficient,
+projected residual contribution. With final-publication numbering, Algorithm 7
+returns its Eq. 37 `R`, exchange `S`, Eq. 38 main term, signed
+spurious-removal term, and Appendix line-19 sum separately. The dense joint
+audit also evaluates literal published Eq. 36 and the old arXiv-v1 Eq. 35 as
+distinct objects. They are audit-only until all coefficient,
 permutation, and composition checks pass.  They must preserve the input array
 backend and may not perform an implicit device-to-host transfer.
 
-Algorithm 6 currently reproduces both dense Eq. 34 and the sum of the
+Algorithm 6 currently reproduces both dense preprint Eq. 34 and the sum of the
 independent Algorithms 4 and 5 implementations. It is a Python/CuPy GEMM
 schedule and carries no CUDA-kernel performance claim. Algorithm 7 reproduces
-dense Eq. 36, dense Eq. 37, and its explicit signed spurious-removal
-contraction. The literal printed Eq. 35 is unequal to Appendix Algorithm 7
-line 22, including in a one-dimensional counterexample. The paper explains
-that Algorithm 7 explicitly removes a contribution normally cancelled while
-evaluating Omega-C. The endpoint therefore retains literal Eq. 35, Eq. 37,
-and Appendix line 22 as distinct audit conventions. The joint audit compares
-`Eq. 33 + Eq. 37 + line 22` with `Eq. 33 + literal Eq. 35` only after checking
-the reconstructed physical pair symmetries. The comparison does not establish
-that literal identity: the one-dimensional all-ones endpoint differs by
-`0.25`, and a nontrivial exact full-pair gauge also differs. Commit `7399a87`
-establishes a different assembly-level fact: the complete RR/CD doubles
-residual requires the raw Algorithm 7 value plus its physical pair transpose.
-Applying that composition exactly once makes the full-pair total residual agree
-with the independent oracle. It does not resolve which printed Eq. 35
-convention produces that composition, so the literal-equation and production
-gates remain fail closed.
+its projected-amplitude intermediate, main ERI contraction, and explicit
+signed spurious-removal contraction. The old literal comparison used arXiv v1
+Eq. 35. That preprint equation is unequal to preprint Algorithm 7 line 22,
+including in a one-dimensional counterexample. The final JCP article corrects
+the disputed factor, as recorded in the primary-source audit below. Commit
+`7399a87` independently established that the complete RR/CD doubles residual
+requires the raw Algorithm 7 value plus its physical pair transpose. The
+published-equation correction now explains that algebraic result and passes
+the explicit small-tensor regression gate. Inexact-factor, WATER2/WATER4,
+iterative-convergence, accuracy, and performance gates must still pass before
+any production path is enabled.
+
+## Published-equation correction and Ref. 107 audit
+
+The author-hosted source for Ref. 107 is Koch *et al.*, *Chem. Phys. Lett.*
+**228**, 233--238 (1994),
+[A direct atomic orbital driven implementation of CCSD](https://trygvehelgaker.no/Publications/ChemPhysLett_228_233_1994.pdf).
+Its printed pages 235--236 give the complete doubles residual in Eq. 32,
+Omega-C in Eq. 35, Omega-D in Eq. 36, and the transformed inactive Fock and
+two-electron combinations in Eqs. 39--40. Eqs. 26--27 state the relevant
+symmetry boundary: the T1-transformed integrals retain bra--ket pair symmetry,
+while the usual within-pair/8-fold symmetry is unavailable.
+
+The final JCP article changes the disputed preprint Eq. 35 into published
+Eq. 36. In the final equation, the second doubles factor is
+
+```text
+2 t[j,l,b,d] - t[j,l,d,b]
+```
+
+rather than the preprint's
+
+```text
+t[j,l,b,d] - t[j,l,d,b].
+```
+
+The final article also renumbers preprint Eqs. 36--37 as published Eqs. 37--38
+and compacts Algorithm 7 line 22 into published line 19. Define
+
+```text
+A[i,j,a,b] = 2 t[i,j,a,b] - t[i,j,b,a]
+S[i,j,a,b] = -t[i,j,b,a]
+L[i,a,j,b] = 2 (ia|jb) - (ib|ja).
+```
+
+For a physical doubles tensor, `t[i,j,a,b] = t[j,i,b,a]`, and for the
+T1-transformed ERIs the allowed bra--ket symmetry is
+`(ia|jb) = (jb|ia)`. Under exactly those symmetries, published Eq. 36
+projects
+
+```text
+1/4 * (A L A + S K S),     K[i,a,j,b] = (ib|ja).
+```
+
+Published Eq. 38 is the `1/4 * A L A` term, while Algorithm 7 line 19 adds
+`1/4 * S K S`. Thus the final published equation and the algorithm have the
+same algebra in the physical full-pair gauge. The earlier `0.25` one-index
+difference diagnoses the arXiv-v1 typo: after the correction, both sides are
+`0.5` for the all-ones endpoint.
+
+This equivalence is not asserted for arbitrary nonsymmetric test tensors,
+because the index relabeling itself uses the physical pair and bra--ket
+symmetries. Nonsymmetric fixtures remain useful for checking each contraction
+endpoint and must report the equivalence as out of scope. Promotion requires
+one-dimensional, nontrivial pair-symmetric, scalar-loop, and exact full-pair
+tests against the final published equation. Passing this algebra gate only
+removes the equation-version blocker; it does not satisfy inexact-fit,
+WATER2/WATER4, convergence, accuracy, or performance gates.
 
 The preprocessing layer fits the three-index `L[A,i,a]` factors as
 
@@ -212,27 +274,38 @@ Algorithm 6 XOR, calls the shared RR back-projection exactly once, and keeps
 the singles outside that projection. The raw Algorithm 7 result and its pair
 transpose are added once before that back-projection. It requires matching
 caller-attested orbital, integral, and one-electron identity tokens across the
-ERI factors and F-hat context. Those tokens do not prove the numerical arrays' provenance or
-make them immutable, which the metadata states explicitly. Because the
-literal Algorithm 7 Eq. 35 mapping remains unresolved, every complete,
-accepted, formal, and production flag is hard-coded false. Requesting Eq. 35
-equivalence fails before any contraction.
+ERI factors and F-hat context. Those tokens do not prove the numerical arrays'
+provenance or make them immutable, which the metadata states explicitly. The
+deprecated `require_eq35_equivalence` name is retained only as a physical
+full-pair gauge precondition and version-of-record contract assertion; the
+independent dense joint audit establishes the actual published Eq. 36 numerical
+identity. Every complete, accepted, formal, production, and performance flag
+remains hard-coded false because no inexact-factor or molecular production gate
+has passed.
 
 ## Current audit status
 
 - Algorithms 4 and 5 pass independent dense Eq. 32 and Eq. 33 references.
 - Algorithm 6 passes dense Eq. 34 and exactly matches Algorithms 4 plus 5 for
   nonsymmetric amplitude and ERI cores.
-- Algorithm 7 passes Eq. 36, Eq. 37, and the signed Appendix line-22 removal.
-  Commit `4b09acd` records that the literal Eq. 35 joint Omega-C/Omega-D
-  mapping remains unequal, including the one-dimensional all-ones difference
-  of `0.25`, without coefficient or sign tuning. Commit `7399a87` adds the raw
+- Algorithm 7 passes published Eq. 37, Eq. 38, and the signed Appendix line-19
+  removal. The independent dense joint audit proves that their sum equals
+  literal published Eq. 36 in the physical full-pair gauge, including a
+  one-dimensional endpoint, a nontrivial pair-symmetric case, and a scalar-loop
+  oracle. Commit `4b09acd` remains valid historical evidence that arXiv-v1
+  Eq. 35 is unequal, including the all-ones difference of `0.25`; that old
+  expression is now an explicit legacy diagnostic. Commit `7399a87` adds the raw
   Algorithm 7 contribution plus its physical pair transpose exactly once. Six
   exact full-pair cases, including nonzero T1 and both Algorithms 4+5 and
   Algorithm 6 paths, reduce the maximum doubles total-identity error from
   `7.746556e-3` before the fix to `1.38778e-16`; the maximum singles error is
   `5.55112e-17`, and Algorithm 6 minus Algorithms 4+5 is at most
   `3.46945e-18`.
+- Commit `1a9eeb3` passes 76 focused CPU tests with seven GPU-environment skips;
+  the complete local THC family passes 256 tests with 34 GPU-environment skips.
+  An independent re-review closed three documentation and gate-semantics issues
+  and found no remaining P0--P2 defect. These counts establish local algebra
+  behavior only; A100 validation of this commit is still missing.
 - Algorithms 8--10 pass independent dense Eq. 38--42 audits, with the Eq. 38
   versus Appendix line-13 and symmetric-core boundaries recorded explicitly.
 - The provenance-bound T1-transformed inactive F-hat builder passes independent
@@ -241,10 +314,11 @@ equivalence fails before any contraction.
   branch, one physical pair symmetrization of Algorithm 7, one doubles
   back-projection, unprojected singles, shared transfer counter, and
   cross-artifact identity tokens. Its exact full-pair total-identity fixture
-  passes, while complete and production gates remain false because Algorithm 7
-  has not passed the literal Eq. 35 mapping. Caller-attested
-  identity tokens neither prove the numerical arrays' origin nor make those
-  arrays immutable, and the assembler reports both limitations.
+  passes. The equation-version contract is now resolved, but complete,
+  accepted, formal, production, and performance flags remain false because
+  inexact-factor and WATER2/WATER4 molecular gates have not passed.
+  Caller-attested identity tokens neither prove the numerical arrays' origin
+  nor make those arrays immutable, and the assembler reports both limitations.
 - Weighted ERI-THC CP/ALS, an exact-pair endpoint, and factorized MP2
   occupation weights are connected by an audit-only preprocessing seam.
 - MTU job 62651 passed 140 A100 CUDA audit tests with six environment skips;
