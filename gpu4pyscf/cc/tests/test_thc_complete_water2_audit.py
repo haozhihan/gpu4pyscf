@@ -144,6 +144,43 @@ def _assert_flags_false(value):
             _assert_flags_false(item)
 
 
+def _assert_current_nonacceptance_reason(value):
+    reason = value['reason_not_accepted']
+    assert (
+        'published Eq. 36 / Algorithm 7 physical full-pair contract is '
+        'algebraically audited'
+    ) in reason
+    for unresolved_gate in (
+        'inexact-factor equation composition',
+        'iterative energy',
+        'CP interaction energy',
+        'full-space residual',
+        'WATER2 validation',
+        'WATER4 validation',
+    ):
+        assert unresolved_gate in reason
+    assert 'Eq. 35' not in reason
+    assert 'Eq35' not in reason
+
+    contract = value['algorithm7_contract']
+    assert contract['version_of_record'] == {
+        'source': 'J. Chem. Phys. 156, 054102 (2022)',
+        'equation': 36,
+        'algorithm': 7,
+        'status': 'algebraically-audited-in-physical-full-pair-gauge',
+        'scope': (
+            'published Eq. 36 equals published Eq. 38 plus Algorithm 7 '
+            'line 19 for pair-symmetric physical factors'
+        ),
+    }
+    assert contract['legacy_preprint_diagnostic'] == {
+        'source': 'arXiv:2111.11473v1',
+        'equation': 35,
+        'status': 'retained-deprecated-version-difference',
+        'acceptance_blocker': False,
+    }
+
+
 class _FakeMemoryPool:
     def __init__(self):
         self.used = 2 * audit_driver.GIB
@@ -746,6 +783,7 @@ def test_exact_algorithms_1_to_10_anchor_uses_one_bound_rr_state():
         assert comparison['audit_denominator_subtraction_count'] == 0
         assert comparison['oracle_denominator_subtraction_count'] == 1
         assert comparison['diagnostic_gate_passed'] is True
+    _assert_current_nonacceptance_reason(result)
     _assert_flags_false(result)
 
 
@@ -820,6 +858,7 @@ def test_staged_audit_uses_the_first_passing_amplitude_without_a_cartesian_scan(
         'eri-scan-1-exit',
         'audit-exit',
     ]
+    _assert_current_nonacceptance_reason(result)
     _assert_flags_false(result)
 
 

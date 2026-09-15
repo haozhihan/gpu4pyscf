@@ -1,4 +1,4 @@
-"""Dense audits for THC paper Algorithms 8--10 and Eqs. 38--42."""
+"""Dense audits for THC Algorithms 8--10 and published Eqs. 39--43."""
 
 from dataclasses import replace
 
@@ -55,7 +55,7 @@ def _project_dense(dense, y_occ, y_vir):
     )
 
 
-def _dense_eq38_parts(t2, cholesky):
+def _dense_published_eq39_parts(t2, cholesky):
     # The hatted-index orientation follows the T1-transformed l_pq arrays
     # printed in Algorithm 8, lines 3--5.  No l_oo/l_vv symmetry is used.
     ov_vv = np.einsum("Akd,Aac->kdac", cholesky.l_ov, cholesky.l_vv)
@@ -69,14 +69,14 @@ def _dense_eq38_parts(t2, cholesky):
     return omega_g, omega_h
 
 
-def _dense_eq39(t2, cholesky):
+def _dense_published_eq40(t2, cholesky):
     ovov = np.einsum("Ame,Akd->mekd", cholesky.l_ov, cholesky.l_ov)
     return 2 * np.einsum("jmde,mekd->kj", t2, ovov) - np.einsum(
         "jmde,mdke->kj", t2, ovov
     )
 
 
-def _dense_eq40(t2, cholesky):
+def _dense_published_eq41(t2, cholesky):
     ovov = np.einsum("Ald,Amc->ldmc", cholesky.l_ov, cholesky.l_ov)
     return -2 * np.einsum("lmdb,ldmc->bc", t2, ovov) + np.einsum(
         "lmdb,lcmd->bc", t2, ovov
@@ -130,14 +130,14 @@ def _literal_algorithm10(y_occ, y_vir, core, fhat_ov, fhat_vo):
     return fhat_vo.T, coulomb, exchange
 
 
-def test_algorithm8_matches_dense_eq38_parts_with_nonsymmetric_cholesky():
+def test_algorithm8_matches_published_eq39_not_literal_line13():
     y_occ, y_vir, core, cholesky, *_ = _problem(
         802, symmetric_core=True
     )
     assert not np.allclose(cholesky.l_oo, cholesky.l_oo.swapaxes(1, 2))
     assert not np.allclose(cholesky.l_vv, cholesky.l_vv.swapaxes(1, 2))
     t2 = _dense_amplitudes(y_occ, y_vir, core)
-    expected_g, expected_h = _dense_eq38_parts(t2, cholesky)
+    expected_g, expected_h = _dense_published_eq39_parts(t2, cholesky)
     observed = thc_omega_gh_algorithm8(y_occ, y_vir, core, cholesky)
 
     np.testing.assert_allclose(observed.omega_g, expected_g, atol=2e-11)
@@ -145,24 +145,30 @@ def test_algorithm8_matches_dense_eq38_parts_with_nonsymmetric_cholesky():
     np.testing.assert_allclose(
         observed.singles_gh, expected_g + expected_h, atol=2e-11
     )
+    assert not np.allclose(
+        observed.appendix_line13_omega_h,
+        expected_h,
+        atol=1e-12,
+        rtol=1e-12,
+    )
 
 
-def test_algorithm8_xi_oo_matches_dense_eq39():
+def test_algorithm8_xi_oo_matches_published_eq40():
     y_occ, y_vir, core, cholesky, *_ = _problem(
         803, symmetric_core=True
     )
-    expected = _dense_eq39(
+    expected = _dense_published_eq40(
         _dense_amplitudes(y_occ, y_vir, core), cholesky
     )
     observed = thc_omega_gh_algorithm8(y_occ, y_vir, core, cholesky)
     np.testing.assert_allclose(observed.xi_oo, expected, atol=2e-11)
 
 
-def test_algorithm8_xi_vv_matches_dense_eq40():
+def test_algorithm8_xi_vv_matches_published_eq41():
     y_occ, y_vir, core, cholesky, *_ = _problem(
         804, symmetric_core=True
     )
-    expected = _dense_eq40(
+    expected = _dense_published_eq41(
         _dense_amplitudes(y_occ, y_vir, core), cholesky
     )
     observed = thc_omega_gh_algorithm8(y_occ, y_vir, core, cholesky)
@@ -188,7 +194,7 @@ def test_algorithm8_nonsymmetric_core_matches_literal_appendix_schedule():
         np.testing.assert_allclose(actual, reference, atol=2e-12)
 
 
-def test_algorithm8_line13_and_eq38_differ_for_t1_nonsymmetric_loo():
+def test_algorithm8_line13_and_published_eq39_differ_for_nonsymmetric_loo():
     y_occ, y_vir, core, cholesky, *_ = _problem(
         819, symmetric_core=True
     )
@@ -235,7 +241,7 @@ def test_algorithm8_cholesky_blocking_does_not_change_outputs():
         )
 
 
-def test_algorithm9_matches_dense_projected_eq41():
+def test_algorithm9_matches_dense_projected_published_eq42():
     (
         y_occ,
         y_vir,
@@ -255,11 +261,11 @@ def test_algorithm9_matches_dense_projected_eq41():
     t2 = _dense_amplitudes(y_occ, y_vir, core)
     effective_oo = fhat_oo + algorithm8.xi_oo
     effective_vv = fhat_vv + algorithm8.xi_vv
-    dense_eq41 = np.einsum("ijac,bc->ijab", t2, effective_vv)
-    dense_eq41 += np.einsum("jica,bc->ijab", t2, effective_vv)
-    dense_eq41 -= np.einsum("ikab,kj->ijab", t2, effective_oo)
-    dense_eq41 -= np.einsum("kiba,kj->ijab", t2, effective_oo)
-    projected = _project_dense(dense_eq41, y_occ, y_vir)
+    dense_eq42 = np.einsum("ijac,bc->ijab", t2, effective_vv)
+    dense_eq42 += np.einsum("jica,bc->ijab", t2, effective_vv)
+    dense_eq42 -= np.einsum("ikab,kj->ijab", t2, effective_oo)
+    dense_eq42 -= np.einsum("kiba,kj->ijab", t2, effective_oo)
+    projected = _project_dense(dense_eq42, y_occ, y_vir)
     expected = (projected + projected.T) / 2
     np.testing.assert_allclose(observed.omega_e, expected, atol=3e-10)
 
@@ -299,7 +305,7 @@ def test_algorithm9_nonsymmetric_core_matches_literal_appendix_schedule():
     )
 
 
-def test_algorithm10_matches_dense_eq42():
+def test_algorithm10_matches_dense_published_eq43():
     (
         y_occ,
         y_vir,
@@ -344,7 +350,7 @@ def test_algorithm10_nonsymmetric_core_matches_literal_appendix_schedule():
     )
     metadata = observed.metadata()
     assert metadata[
-        "equation42_equivalence_requires_symmetric_amplitude_core"
+        "published_equation43_equivalence_requires_symmetric_amplitude_core"
     ] is True
     assert metadata["nonsymmetric_amplitude_core_status"] == (
         "appendix-literal-schedule-audit-only"
@@ -371,14 +377,25 @@ def test_algorithms8_to10_metadata_states_unresolved_conventions():
     algorithm10 = thc_omega_ij_algorithm10(
         y_occ, y_vir, core, fhat_ov, fhat_vo
     )
-    for number, equations, result in (
-        (8, [38, 39, 40], algorithm8),
-        (9, [39, 40, 41], algorithm9),
-        (10, [42], algorithm10),
+    for number, equations, arxiv_v1_equations, result in (
+        (8, [39, 40, 41], [38, 39, 40], algorithm8),
+        (9, [40, 41, 42], [39, 40, 41], algorithm9),
+        (10, [43], [42], algorithm10),
     ):
         metadata = result.metadata()
         assert metadata["paper_algorithm"] == number
         assert metadata["paper_equations"] == equations
+        assert metadata["published_equations"] == equations
+        assert metadata["arxiv_v1_equations"] == arxiv_v1_equations
+        assert metadata["paper_version"] == "version-of-record"
+        assert metadata["equation_numbering_authority"] == (
+            "published-version-of-record"
+        )
+        assert metadata["paper_source"] == (
+            "J. Chem. Phys. 156, 054102 (2022), "
+            "DOI:10.1063/5.0077770"
+        )
+        assert metadata["arxiv_v1_source"] == "arXiv:2111.11473v1"
         assert metadata["audit_only"] is True
         assert metadata["production_enabled"] is False
         assert metadata["performance_eligible"] is False
@@ -399,17 +416,24 @@ def test_algorithms8_to10_metadata_states_unresolved_conventions():
     assert algorithm9.metadata()["consumes_algorithm8_singles"] is False
     metadata10 = algorithm10.metadata()
     assert metadata10[
-        "equation42_equivalence_requires_symmetric_amplitude_core"
+        "published_equation43_equivalence_requires_symmetric_amplitude_core"
     ] is True
     assert metadata10["nonsymmetric_amplitude_core_status"] == (
         "appendix-literal-schedule-audit-only"
     )
     metadata8 = algorithm8.metadata()
-    assert metadata8["equation38_occupied_orientation"] == "l_ji-times-D_ja"
+    assert metadata8["published_equation39_occupied_orientation"] == (
+        "l_ji-times-D_ja"
+    )
+    assert metadata8[
+        "legacy_arxiv_v1_equation38_occupied_orientation"
+    ] == "l_ji-times-D_ja"
     assert metadata8["appendix_algorithm8_line13_orientation"] == (
         "l_ij-times-D_ja"
     )
-    assert metadata8["algorithm8_line13_eq38_equivalence"] is False
+    assert metadata8[
+        "algorithm8_line13_published_equation39_equivalence"
+    ] is False
     assert metadata8["algorithm8_line13_status"] == (
         "retained-separately-fail-closed"
     )

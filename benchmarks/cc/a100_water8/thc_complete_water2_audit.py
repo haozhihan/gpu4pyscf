@@ -86,6 +86,36 @@ FAIL_CLOSED_FLAGS = {
     'complete_validated': False,
 }
 
+_REASON_NOT_ACCEPTED = (
+    'development audit only; the published Eq. 36 / Algorithm 7 physical '
+    'full-pair contract is algebraically audited; unresolved acceptance gates '
+    'are inexact-factor equation composition, iterative energy, CP interaction '
+    'energy, full-space residual, WATER2 validation, and WATER4 validation'
+)
+
+
+def _algorithm7_contract_status() -> dict[str, Any]:
+    """Separate the audited published contract from its legacy diagnostic."""
+
+    return {
+        'version_of_record': {
+            'source': 'J. Chem. Phys. 156, 054102 (2022)',
+            'equation': 36,
+            'algorithm': 7,
+            'status': 'algebraically-audited-in-physical-full-pair-gauge',
+            'scope': (
+                'published Eq. 36 equals published Eq. 38 plus Algorithm 7 '
+                'line 19 for pair-symmetric physical factors'
+            ),
+        },
+        'legacy_preprint_diagnostic': {
+            'source': 'arXiv:2111.11473v1',
+            'equation': 35,
+            'status': 'retained-deprecated-version-difference',
+            'acceptance_blocker': False,
+        },
+    }
+
 
 def _load_benchmark_module():
     name = 'water2_thc_complete_shared_benchmark'
@@ -1618,11 +1648,8 @@ def evaluate_candidate(
         'energy_gate_evaluated': False,
         'interaction_energy_gate_evaluated': False,
         'full_space_residual_gate_evaluated': False,
-        'reason_not_accepted': (
-            'audit-only residual seam; Algorithm 7 literal Eq. 35 mapping, '
-            'iterative energy, CP interaction energy, and full-space gates '
-            'remain unresolved'
-        ),
+        'algorithm7_contract': _algorithm7_contract_status(),
+        'reason_not_accepted': _REASON_NOT_ACCEPTED,
         **_copy_flags(),
     }
 
@@ -1982,10 +2009,8 @@ def run_staged_audit(
         'staged_search_found_candidate': bool(final_candidates),
         'transfer_counter': binding.transfer_counter.to_dict(),
         'hbm_observations': (None if hbm_observer is None else hbm_observer.metadata()),
-        'reason_not_accepted': (
-            'development audit only; no iterative THC energy, CP interaction '
-            'energy, full-space residual, WATER4 gate, or Eq. 35 resolution'
-        ),
+        'algorithm7_contract': _algorithm7_contract_status(),
+        'reason_not_accepted': _REASON_NOT_ACCEPTED,
         **_copy_flags(),
     }
 

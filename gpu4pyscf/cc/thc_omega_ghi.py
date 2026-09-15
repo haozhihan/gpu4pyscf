@@ -12,11 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Audit-only THC contractions for paper Algorithms 8--10.
+"""Audit-only THC contractions for published Algorithms 8--10.
 
 The routines in this module reproduce Appendix Algorithms 8--10 and
-Eqs. 38--42 of Hohenstein *et al.*, J. Chem. Phys. **156**, 054102
-(2022), DOI 10.1063/5.0077770 (arXiv:2111.11473v1).  They cover the
+Eqs. 39--43 of Hohenstein *et al.*, J. Chem. Phys. **156**, 054102
+(2022), DOI 10.1063/5.0077770.  The corresponding equations in
+arXiv:2111.11473v1 are numbered 38--42.  The routines cover the
 ``Omega-G/H`` singles terms, the ``xi_oo`` and ``xi_vv`` intermediates used
 by ``Omega-E``, and the final ``Omega-I/J`` singles terms.
 
@@ -25,10 +26,11 @@ they enter this module.  This endpoint deliberately does not manufacture
 those transformations: the paper's delta convention in Algorithm 8 and the
 mapping of the hatted Fock blocks to the complete residual have not yet been
 made unique by the repository's full-equation ledger.  In addition, literal
-Algorithm 8 line 13 uses ``l_ij`` where Eqs. 24 and 38 require ``l_ji`` once
-the T1 transform removes Cholesky-matrix symmetry.  The Eq. 38 result and the
-literal appendix result are therefore retained separately.  These routines
-are algebraic audits only and are not wired to the production THC-RR driver.
+Algorithm 8 line 13 uses ``l_ij`` where published Eqs. 24 and 39 require
+``l_ji`` once the T1 transform removes Cholesky-matrix symmetry.  The
+published Eq. 39 result and the literal appendix result are therefore
+retained separately.  These routines are algebraic audits only and are not
+wired to the production THC-RR driver.
 """
 
 from __future__ import annotations
@@ -159,15 +161,24 @@ def _audit_metadata(
     *,
     algorithm: int,
     equations: list[int],
+    arxiv_v1_equations: list[int],
     output: str,
     backend: str,
     dtype: str,
 ) -> dict[str, Any]:
     return {
         "paper": "Hohenstein-2022",
-        "paper_source": "arXiv:2111.11473v1",
+        "paper_source": (
+            "J. Chem. Phys. 156, 054102 (2022), "
+            "DOI:10.1063/5.0077770"
+        ),
+        "paper_version": "version-of-record",
+        "equation_numbering_authority": "published-version-of-record",
         "paper_algorithm": algorithm,
         "paper_equations": equations,
+        "published_equations": equations,
+        "arxiv_v1_source": "arXiv:2111.11473v1",
+        "arxiv_v1_equations": arxiv_v1_equations,
         "output": output,
         "coordinate_space": (
             "orbital-singles" if algorithm != 9 else "amplitude-thc-auxiliary"
@@ -181,7 +192,7 @@ def _audit_metadata(
         "delta_xy_convention": "literal-kronecker-delta-from-algorithm-8",
         "delta_xy_convention_uniquely_validated": False,
         "transformed_f_convention": (
-            "caller-supplied-hatted-F-blocks-from-paper-equations-41-42"
+            "caller-supplied-hatted-F-blocks-from-published-equations-42-43"
         ),
         "transformed_f_convention_uniquely_validated": False,
         "literal_equation_oracle_requires_symmetric_amplitude_core": True,
@@ -259,7 +270,7 @@ class T1TransformedCholeskyBlocks:
 
 @dataclass(frozen=True)
 class THCOmegaGHAlgorithm8Result:
-    """Separated Algorithm 8 singles and Eq. 39--40 intermediates."""
+    """Published Eq. 39 singles and Eq. 40--41 intermediates."""
 
     omega_g: Any
     omega_h: Any
@@ -282,7 +293,8 @@ class THCOmegaGHAlgorithm8Result:
         xp = _array_module(self.singles_gh)
         metadata = _audit_metadata(
             algorithm=8,
-            equations=[38, 39, 40],
+            equations=[39, 40, 41],
+            arxiv_v1_equations=[38, 39, 40],
             output="Omega-G/H-singles-and-xi-oo-xi-vv",
             backend=xp.__name__,
             dtype=np.dtype(self.singles_gh.dtype).name,
@@ -299,18 +311,25 @@ class THCOmegaGHAlgorithm8Result:
                     "caller-supplied-T1-transformed-particle-hole-blocks"
                 ),
                 "cholesky_orbital_symmetry_enforced": False,
-                "equation38_occupied_orientation": "l_ji-times-D_ja",
+                "published_equation39_occupied_orientation": (
+                    "l_ji-times-D_ja"
+                ),
+                "legacy_arxiv_v1_equation38_occupied_orientation": (
+                    "l_ji-times-D_ja"
+                ),
                 "appendix_algorithm8_line13_orientation": "l_ij-times-D_ja",
-                "algorithm8_line13_eq38_equivalence": False,
+                "algorithm8_line13_published_equation39_equivalence": False,
                 "algorithm8_line13_status": "retained-separately-fail-closed",
                 "algorithm8_line13_reason": (
-                    "Eqs. 24 and 38 require the transpose of the literal "
-                    "line-13 occupied Cholesky block after the T1 transform"
+                    "published Eqs. 24 and 39 require the transpose of the "
+                    "literal line-13 occupied Cholesky block after the T1 "
+                    "transform"
                 ),
                 "transformed_f_used": False,
                 "actual_schedule": (
-                    "blocked NumPy/CuPy Eq. 38-40 implementation plus a "
-                    "separate literal Appendix Algorithm 8 line-13 audit"
+                    "blocked NumPy/CuPy published Eq. 39-41 implementation "
+                    "plus a separate literal Appendix Algorithm 8 line-13 "
+                    "audit"
                 ),
             }
         )
@@ -336,7 +355,8 @@ class THCOmegaEAlgorithm9Result:
         xp = _array_module(self.omega_e)
         metadata = _audit_metadata(
             algorithm=9,
-            equations=[39, 40, 41],
+            equations=[40, 41, 42],
+            arxiv_v1_equations=[39, 40, 41],
             output="Omega-E-raw-amplitude-thc-core",
             backend=xp.__name__,
             dtype=np.dtype(self.omega_e.dtype).name,
@@ -351,7 +371,7 @@ class THCOmegaEAlgorithm9Result:
                 "consumes_algorithm8_singles": False,
                 "fhat_block_shapes": ["oo", "vv"],
                 "requires_rr_back_projection": True,
-                "applies_equation41_core_symmetrization": True,
+                "applies_published_equation42_core_symmetrization": True,
                 "actual_schedule": (
                     "NumPy/CuPy matrix products in Appendix Algorithm 9 order"
                 ),
@@ -380,7 +400,8 @@ class THCOmegaIJAlgorithm10Result:
         xp = _array_module(self.singles_ij)
         metadata = _audit_metadata(
             algorithm=10,
-            equations=[42],
+            equations=[43],
+            arxiv_v1_equations=[42],
             output="Omega-I/J-singles",
             backend=xp.__name__,
             dtype=np.dtype(self.singles_ij.dtype).name,
@@ -393,9 +414,8 @@ class THCOmegaIJAlgorithm10Result:
                 ),
                 "fhat_block_shapes": ["ov", "vo"],
                 "direct_fhat_vo_included": True,
-                "equation42_equivalence_requires_symmetric_amplitude_core": (
-                    True
-                ),
+                "published_equation43_equivalence_requires_symmetric_"
+                "amplitude_core": True,
                 "nonsymmetric_amplitude_core_status": (
                     "appendix-literal-schedule-audit-only"
                 ),
@@ -482,14 +502,15 @@ def thc_omega_gh_algorithm8(
         )
         d_aia = xp.einsum("iY,aX,AXY->Aia", y_occ, y_vir, c_axy)
 
-        # Lines 10--12 agree with Eqs. 38--40 as printed.
+        # Lines 10--12 agree with published Eqs. 39--41 as printed.
         xi_oo += xp.einsum("Aia,Aja->ij", l_ov, d_aia)
         xi_vv -= xp.einsum("Aia,Aib->ab", d_aia, l_ov)
         omega_g += xp.einsum("Aib,Aab->ia", d_aia, l_vv)
 
-        # Eq. 24 gives (l c-hat|k i) = Lhat_lc Lhat_ki.  Consequently the
-        # occupied part of Eq. 38 requires l_ji below.  Literal Appendix
-        # Algorithm 8 line 13 instead prints l_ij; retain it separately so
+        # Published Eq. 24 gives (l c-hat|k i) = Lhat_lc Lhat_ki.
+        # Consequently the occupied part of published Eq. 39 requires l_ji
+        # below.  Literal Appendix Algorithm 8 line 13 instead prints l_ij;
+        # retain it separately so
         # nonsymmetric T1-transformed blocks expose, rather than hide, the
         # discrepancy.  This is the same kind of transpose boundary already
         # documented for Appendix Algorithm 1 in ``thc_residual.py``.
@@ -603,7 +624,7 @@ def thc_omega_e_algorithm9(
         overlap_occ * dressed_vir - dressed_occ * overlap_vir
     )
 
-    # Line 10 is the symmetric projected Eq. 41 contribution.
+    # Line 10 is the symmetric projected published Eq. 42 contribution.
     omega_e = (
         one_body_metric @ amplitude_metric.T
         + amplitude_metric @ one_body_metric.T
@@ -650,9 +671,10 @@ def thc_omega_ij_algorithm10(
 ) -> THCOmegaIJAlgorithm10Result:
     """Evaluate the Algorithm 10 ``Omega-I/J`` singles contribution.
 
-    The result is formally identified with Eq. 42 only for a symmetric
-    amplitude core.  A nonsymmetric core remains useful as a transpose test,
-    but its result audits only the literal Appendix Algorithm 10 schedule.
+    The result is formally identified with published Eq. 43 only for a
+    symmetric amplitude core.  A nonsymmetric core remains useful as a
+    transpose test, but its result audits only the literal Appendix
+    Algorithm 10 schedule.
     """
 
     xp, dtype, nocc, nvir, rank = _validate_amplitudes(
