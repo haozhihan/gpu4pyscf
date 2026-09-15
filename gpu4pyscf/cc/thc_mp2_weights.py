@@ -344,6 +344,16 @@ class FactorizedMP2NaturalOccupationWeights:
             "thc_fit_analytic_full_pair_endpoint": bool(
                 factors.analytic_full_pair_endpoint
             ),
+            "thc_fit_exact_pair_endpoint": bool(factors.exact_pair_endpoint),
+            "thc_fit_exact_pair_roundoff_bound": float(
+                factors.exact_pair_roundoff_bound
+            ),
+            "thc_fit_exact_pair_roundoff_error": float(
+                factors.exact_pair_roundoff_error
+            ),
+            "thc_fit_exact_pair_roundoff_gate_passed": bool(
+                factors.exact_pair_roundoff_gate_passed
+            ),
             "provenance_binding": "runtime-object-identity",
             "rr_doubles_runtime_identity": id(doubles),
             "rr_projector_runtime_identity": id(projector),
@@ -471,9 +481,10 @@ def _validate_sources(
         amplitude_factors.orthogonality_error,
         nonnegative=True,
     )
-    if weighted_residual > fit_tolerance:
+    exact_pair_endpoint = amplitude_factors.exact_pair_endpoint
+    if weighted_residual > amplitude_factors.weighted_fit_gate_limit:
         raise ValueError(
-            "amplitude THC weighted fit residual exceeds its recorded tolerance"
+            "amplitude THC weighted fit residual exceeds its recorded gate"
         )
     cutoff = float(projector.cutoff)
     if not math.isfinite(cutoff) or cutoff < 0.0:
@@ -533,7 +544,12 @@ def _validate_sources(
         * np.finfo(dtype).eps
         * max(1, nocc * nvir, rr_rank, thc_rank)
     )
-    if verified_fit_residual > fit_tolerance + fit_roundoff:
+    verified_fit_limit = (
+        amplitude_factors.weighted_fit_gate_limit
+        if exact_pair_endpoint
+        else fit_tolerance + fit_roundoff
+    )
+    if verified_fit_residual > verified_fit_limit:
         raise ValueError(
             "amplitude THC factors do not satisfy their fit tolerance for "
             "the supplied RR projector identity"
@@ -571,6 +587,17 @@ def _validate_sources(
     ):
         raise ValueError(
             "amplitude THC factors fail the semi-unitary projector gate"
+        )
+    if (
+        exact_pair_endpoint
+        and (
+            not amplitude_factors.exact_pair_roundoff_gate_passed
+            or orthogonality_error
+            > amplitude_factors.exact_pair_roundoff_bound
+        )
+    ):
+        raise ValueError(
+            "analytic full-pair amplitude THC factors exceed their roundoff gate"
         )
     return (
         xp,

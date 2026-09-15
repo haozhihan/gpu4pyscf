@@ -470,10 +470,14 @@ def _validate_factor_lifecycle(
         raise ValueError("THC factor orbital dimensions do not match doubles")
     if not factors.converged:
         raise RuntimeError("unconverged THC projector factors cannot enter CCSD")
-    if factors.weighted_fit_residual > factors.fit_tolerance:
+    if factors.weighted_fit_residual > factors.weighted_fit_gate_limit:
         raise RuntimeError("THC projector factors failed their weighted fit gate")
     if factors.orthogonality_error > 1e-10:
         raise RuntimeError("THC projector factors failed the orthogonality gate")
+    if factors.exact_pair_endpoint and not factors.exact_pair_roundoff_gate_passed:
+        raise RuntimeError(
+            "analytic full-pair THC projector factors failed their roundoff gate"
+        )
     if not factors.analytic_full_pair_endpoint:
         raise NotImplementedError(
             "inexact direct-CD amplitude THC is disabled until the water2 "
