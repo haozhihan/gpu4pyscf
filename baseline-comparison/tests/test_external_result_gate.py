@@ -359,6 +359,36 @@ def test_valid_byteqc_is_s_l1_w4_candidate_but_not_formal_v1(tmp_path: Path):
     assert decision["gates"]["numerical_oracle"]["absolute_error_eh"] < 1e-8
 
 
+def test_byteqc_self_reported_tree_digest_cannot_unlock_formal_comparability(
+    tmp_path: Path,
+):
+    bundle = byteqc_fixture(tmp_path)
+    result = json.loads(Path(bundle["result"]).read_text())
+    result["provenance"]["source_tree_sha256"] = "f" * 64
+    result["comparison_contract"]["normal_checkpoint"] = True
+    result["comparison_contract"]["separate_final_full_space_residual"] = True
+    result["checkpoint"] = {"included_in_post_hf": True, "sha256": "e" * 64}
+    result["residual"] = {
+        "available": True,
+        "is_full_space": True,
+        "included_in_post_hf": True,
+        "equation_norm": 5e-8,
+    }
+    result["canonical_orbitals"] = {"artifact_sha256": "d" * 64}
+    write_json(Path(bundle["result"]), result)
+
+    decision = run_byteqc_audit(bundle)
+    assert decision["water2_gate_passed"] is True
+    assert decision["w4_eligible"] is True
+    assert decision["classification"]["evidence_level"] == "L1"
+    formal = decision["classification"]["formal_v1_post_hf_comparability"]
+    assert formal["eligible"] is False
+    assert formal["reasons"] == [
+        "immutable source tree not independently receipt-bound: ByteQC v2 "
+        "result fields cannot self-attest a sealed source tree"
+    ]
+
+
 @pytest.mark.parametrize(
     ("mutator", "gate_name"),
     [

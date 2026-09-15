@@ -832,6 +832,10 @@ def _formal_comparability(software: str, result: Mapping[str, Any]) -> dict[str,
         ):
             reasons.append("candidate final full-space residual is not a timed <=1e-6 check")
     if software == "byteqc":
+        reasons.append(
+            "immutable source tree not independently receipt-bound: ByteQC v2 "
+            "result fields cannot self-attest a sealed source tree"
+        )
         source_tree_sha = _at(result, "provenance.source_tree_sha256")
         if _sha(source_tree_sha) is None:
             reasons.append(

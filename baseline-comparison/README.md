@@ -22,6 +22,11 @@
 
 无论软件类别，只要缺失正常 checkpoint 或最终 full-space residual，
 `formal_v1_post_hf_comparability.eligible` 就保持 `false`。
+此外，当前 ByteQC v2 runner 与 scheduler receipt 没有独立绑定 sealed source tree；
+result 自报的任意 `source_tree_sha256` 不能自证来源。即使手工补齐该字段、
+checkpoint、residual 和 orbital SHA，本 v1 capability 仍无条件给出
+`immutable source tree not independently receipt-bound`，保持 formal `false`。
+未来只能由新 schema 接入独立签名或 sealed source receipt，不能复用当前字段解锁。
 
 ## 终态 scheduler 证据
 
