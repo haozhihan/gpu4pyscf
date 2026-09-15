@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 from contextlib import nullcontext
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -25,8 +26,10 @@ from gpu4pyscf.cc.gint_selected_columns import (
     _CSelectedPairData,
     _basis_prod_cache_abi_identity,
     _device_multiprocessor_count,
+    _normalise_column_kernel,
     _selected_pair_abi_identity,
     _normalise_selected_pairs,
+    _order_selected_request,
     build_selected_pair_schedule,
 )
 from gpu4pyscf.cc.gint_transfer_audit import (
@@ -349,6 +352,105 @@ def test_selected_column_batch_contract_accepts_b1_and_b_gt_1_only():
         _normalise_selected_pairs([True], dimension=6, max_batch_size=2)
 
 
+@pytest.mark.parametrize("selected_count", [1, 2, 8, 32])
+def test_grouped_selected_request_is_stable_and_preserves_output_rows(
+    selected_count,
+):
+    pair_task_id = np.repeat(np.arange(8, dtype=np.int32), 8)
+    pivots = np.arange(selected_count, dtype=np.int32)[::-1]
+    rows = np.arange(selected_count, dtype=np.int32)
+
+    ordered, ordered_rows, group_count = _order_selected_request(
+        pivots,
+        rows,
+        pair_task_id,
+        column_kernel="grouped",
+    )
+
+    tasks = pair_task_id[ordered]
+    assert np.all(tasks[1:] >= tasks[:-1])
+    assert group_count == np.unique(pair_task_id[pivots]).size
+    reconstructed = np.empty_like(ordered)
+    reconstructed[ordered_rows] = ordered
+    np.testing.assert_array_equal(reconstructed, pivots)
+    assert ordered.dtype == np.int32
+    assert ordered_rows.dtype == np.int32
+    assert ordered.flags.writeable is False
+    assert ordered_rows.flags.writeable is False
+
+
+def test_reference_selected_request_preserves_order_and_counts_each_pivot():
+    pivots = np.array([5, 0, 3, 1], dtype=np.int32)
+    rows = np.arange(pivots.size, dtype=np.int32)
+    tasks = np.array([2, 0, 1, 0, 3, 2], dtype=np.int32)
+    ordered, ordered_rows, group_count = _order_selected_request(
+        pivots, rows, tasks, column_kernel="reference"
+    )
+    np.testing.assert_array_equal(ordered, pivots)
+    np.testing.assert_array_equal(ordered_rows, rows)
+    assert group_count == pivots.size
+
+
+def test_column_kernel_selector_is_explicit_and_fail_closed():
+    assert _normalise_column_kernel(" REFERENCE ") == "reference"
+    assert _normalise_column_kernel("Grouped") == "grouped"
+    with pytest.raises(TypeError, match="must be a string"):
+        _normalise_column_kernel(None)
+    with pytest.raises(ValueError, match="reference, grouped"):
+        _normalise_column_kernel("automatic")
+
+
+def test_grouped_gout_counter_matches_cutoff_and_distinct_ket_tasks():
+    provider = object.__new__(GINTSelectedAOPairColumnProvider)
+    provider.schedule = SimpleNamespace(
+        cp_task_offsets=np.array([0, 3, 5], dtype=np.int32),
+        task_log_q=np.array([0.0, -5.0, -10.0, 0.0, -20.0]),
+        pair_task_id=np.array([0, 0, 1], dtype=np.int32),
+    )
+    provider.direct_scf_tol = float(np.exp(-6.0))
+    selected = np.array([0, 1, 2], dtype=np.int32)
+
+    provider.column_kernel = "grouped"
+    reference, grouped = provider._column_gout_counts(
+        cp_ij_id=0, cp_kl_id=1, selected_pairs=selected
+    )
+    assert reference == 4
+    assert grouped == 2
+
+    provider.column_kernel = "reference"
+    reference, actual = provider._column_gout_counts(
+        cp_ij_id=0, cp_kl_id=1, selected_pairs=selected
+    )
+    assert reference == actual == 4
+
+
+def test_pre_cutoff_group_attempts_are_distinct_from_screened_gout_builds():
+    provider = object.__new__(GINTSelectedAOPairColumnProvider)
+    provider.schedule = SimpleNamespace(
+        cp_task_offsets=np.array([0, 1, 3], dtype=np.int32),
+        task_log_q=np.array([0.0, 0.0, -20.0]),
+        pair_task_id=np.array([0, 1], dtype=np.int32),
+    )
+    provider.direct_scf_tol = float(np.exp(-6.0))
+    provider.column_kernel = "grouped"
+    selected = np.array([0, 1], dtype=np.int32)
+    _ordered, _rows, group_count = _order_selected_request(
+        selected,
+        np.arange(2, dtype=np.int32),
+        provider.schedule.pair_task_id,
+        column_kernel="grouped",
+    )
+    _reference, screened_gout = provider._column_gout_counts(
+        cp_ij_id=0, cp_kl_id=1, selected_pairs=selected
+    )
+    precutoff_attempts = group_count * int(
+        provider.schedule.cp_task_offsets[1]
+        - provider.schedule.cp_task_offsets[0]
+    )
+    assert precutoff_attempts == 2
+    assert screened_gout == 1
+
+
 def test_selected_provider_exposes_resident_pair_indices_without_copy():
     provider = object.__new__(GINTSelectedAOPairColumnProvider)
     pair_i = object()
@@ -505,6 +607,7 @@ def test_constant_cache_copy_status_counts_only_a_confirmed_c_abi_copy():
     provider._record_constant_cache_copy(0)
     assert provider._transfer_bytes["h2d"] == {}
     assert provider.transfer_counter.records == []
+    assert getattr(provider, "constant_cache_copies", 0) == 0
 
     provider._record_constant_cache_copy(1)
     assert provider._transfer_bytes["h2d"] == {
@@ -513,6 +616,7 @@ def test_constant_cache_copy_status_counts_only_a_confirmed_c_abi_copy():
     assert provider._transfer_counts["h2d"] == {
         "selected_gint_constant_cache": 1
     }
+    assert provider.constant_cache_copies == 1
     with pytest.raises(RuntimeError, match="invalid constant-copy status"):
         provider._record_constant_cache_copy(2)
 
@@ -541,12 +645,18 @@ def test_selected_cuda_source_and_public_abi_are_bounded_and_fail_closed():
     assert "GINT_SELECTED_HIGH_RYS_THREADS = 32" in source
     assert "selected_columns_kernel_bounded_workspace" in source
     assert "selected_diagonal_kernel_bounded_workspace" in source
+    assert "selected_columns_kernel_grouped_cutoff" in source
+    assert "selected_columns_kernel_grouped_bounded_workspace" in source
+    assert "selected_columns_grouped_task" in source
+    assert "GINT_SELECTED_GROUPED_COLUMNS = 2" in source
+    assert "data->abi_version != 2" in source
     assert "provider-owned-bounded-global-grid-stride" in provider
     assert "case 7: return launch_selected_columns_bounded_workspace" in source
     assert "case 8: return launch_selected_columns_bounded_workspace" in source
     assert "case 7: return launch_selected_diagonal_bounded_workspace" in source
     assert "case 8: return launch_selected_diagonal_bounded_workspace" in source
     assert "performance_eligible = False" in provider
+    assert '_COLUMN_KERNELS = ("reference", "grouped")' in provider
     assert "materializes_per_pivot_ao_matrix = False" in provider
     assert "single_shell_support != 1" in source
     assert "spherical != 1" in source
@@ -575,6 +685,15 @@ def _require_selected_cuda_abi():
     ):
         pytest.skip("libgint has not been rebuilt with the selected-pair ABI")
     return cupy
+
+
+def _require_grouped_cuda_abi():
+    if os.getenv("GPU4PYSCF_TEST_GROUPED_GINT") != "1":
+        pytest.skip(
+            "set GPU4PYSCF_TEST_GROUPED_GINT=1 only with a grouped-enabled "
+            "libgint rebuilt from this source tree"
+        )
+    return _require_selected_cuda_abi()
 
 
 def test_selected_cuda_stream_contract_rejects_two_nondefault_streams(
@@ -752,3 +871,240 @@ def test_selected_cuda_water_d_shells_and_offdiagonal_groups_match_reference():
         atol=2e-10,
         rtol=2e-11,
     )
+
+
+def test_grouped_cuda_selected_counts_1_2_8_32_match_reference():
+    cupy = _require_grouped_cuda_abi()
+    from pyscf import gto
+
+    mol = gto.M(
+        atom="O 0 0 0; H 0 -0.757 0.587; H 0 0.757 0.587",
+        basis="cc-pvdz",
+        unit="Angstrom",
+        cart=False,
+        verbose=0,
+    )
+    reference = GINTSelectedAOPairColumnProvider(
+        mol,
+        direct_scf_tol=1e-14,
+        group_size=8,
+        max_batch_size=32,
+        column_kernel="reference",
+    )
+    grouped = GINTSelectedAOPairColumnProvider(
+        mol,
+        direct_scf_tol=1e-14,
+        group_size=8,
+        max_batch_size=32,
+        column_kernel="grouped",
+    )
+    scheduled = np.flatnonzero(reference.schedule.pair_task_id >= 0)
+    order = np.lexsort((
+        scheduled,
+        reference.schedule.pair_task_id[scheduled],
+        reference.schedule.pair_cp_id[scheduled],
+    ))
+    master = scheduled[order][:32]
+    assert master.size == 32
+
+    for selected_count in (1, 2, 8, 32):
+        pivots = master[:selected_count]
+        expected = reference.columns(pivots)
+        actual = grouped.columns(pivots)
+        assert float(cupy.max(cupy.abs(actual - expected)).item()) <= 2e-10
+
+    reference_diagonal = reference.diagonal()
+    grouped_diagonal = grouped.diagonal()
+    assert float(cupy.max(
+        cupy.abs(grouped_diagonal - reference_diagonal)
+    ).item()) <= 2e-10
+    metadata = grouped.metadata()
+    assert metadata["column_kernel"] == "grouped"
+    assert metadata["performance_eligible"] is False
+    assert metadata["column_gout_evaluations"] > 0
+    assert metadata["reference_column_gout_evaluations"] >= (
+        metadata["column_gout_evaluations"]
+    )
+    assert metadata["grouped_gout_evaluations_saved"] > 0
+    assert metadata["constant_cache_copies"] == metadata["cabi_calls"]
+
+
+def test_grouped_cuda_keeps_direct_cd_pivots_rank_and_diagonal():
+    cupy = _require_grouped_cuda_abi()
+    from pyscf import gto
+
+    from gpu4pyscf.cc.device_runtime import TransferCounter
+    from gpu4pyscf.cc.direct_cd import pivoted_cholesky_from_columns
+
+    mol = gto.M(
+        atom="H 0 0 0; H 0 0 0.74",
+        basis="sto-3g",
+        unit="Angstrom",
+        cart=False,
+        verbose=0,
+    )
+    reference = GINTSelectedAOPairColumnProvider(
+        mol,
+        direct_scf_tol=1e-14,
+        group_size=8,
+        max_batch_size=2,
+        column_kernel="reference",
+    )
+    grouped = GINTSelectedAOPairColumnProvider(
+        mol,
+        direct_scf_tol=1e-14,
+        group_size=8,
+        max_batch_size=2,
+        column_kernel="grouped",
+    )
+    reference_diagonal = reference.diagonal()
+    grouped_diagonal = grouped.diagonal()
+    reference_cd = pivoted_cholesky_from_columns(
+        reference,
+        threshold=1e-10,
+        column_batch_size=2,
+        transfer_counter=TransferCounter(),
+    )
+    grouped_cd = pivoted_cholesky_from_columns(
+        grouped,
+        threshold=1e-10,
+        column_batch_size=2,
+        transfer_counter=TransferCounter(),
+    )
+    assert float(cupy.max(
+        cupy.abs(grouped_diagonal - reference_diagonal)
+    ).item()) <= 2e-10
+    assert grouped_cd.pivots == reference_cd.pivots
+    assert grouped_cd.rank == reference_cd.rank
+    assert abs(
+        grouped_cd.residual_diagonal - reference_cd.residual_diagonal
+    ) <= 2e-10
+
+
+def test_grouped_cuda_rys7_workspace_screening_and_interleaved_ab():
+    """MTU-only coverage for the bounded Rys-7 grouped workspace path."""
+
+    cupy = _require_grouped_cuda_abi()
+    from pyscf import gto
+
+    from gpu4pyscf.cc.device_runtime import TransferCounter
+    from gpu4pyscf.cc.direct_cd import pivoted_cholesky_from_columns
+
+    mol = gto.M(
+        atom="O 0 0 0; H 0 -0.757 0.587; H 0 0.757 0.587",
+        basis="cc-pvtz",
+        unit="Angstrom",
+        cart=False,
+        verbose=0,
+    )
+    providers = {
+        kernel: GINTSelectedAOPairColumnProvider(
+            mol,
+            direct_scf_tol=1e-8,
+            group_size=16,
+            max_batch_size=32,
+            column_kernel=kernel,
+        )
+        for kernel in ("reference", "grouped")
+    }
+    reference = providers["reference"]
+    grouped = providers["grouped"]
+    assert reference._maximum_rys_order == grouped._maximum_rys_order == 7
+    assert reference._high_rys_workspace_nbytes > 0
+    assert (
+        grouped._high_rys_workspace_nbytes
+        == reference._high_rys_workspace_nbytes
+    )
+
+    scheduled = np.flatnonzero(reference.schedule.pair_task_id >= 0)
+    keys = np.stack((
+        reference.schedule.pair_cp_id[scheduled],
+        reference.schedule.pair_task_id[scheduled],
+    ), axis=1)
+    groups = []
+    log_cutoff = float(np.log(reference.direct_scf_tol))
+    for key in np.unique(keys, axis=0):
+        members = scheduled[np.all(keys == key, axis=1)]
+        cp_id, task_id = (int(value) for value in key)
+        ket_log_q = reference.schedule.task_log_q[
+            int(reference.schedule.cp_task_offsets[cp_id]) + task_id
+        ]
+        screened = any(
+            np.any(
+                reference.schedule.task_log_q[
+                    int(reference.schedule.cp_task_offsets[row_cp_id])
+                    : int(reference.schedule.cp_task_offsets[row_cp_id + 1])
+                ] + ket_log_q < log_cutoff
+            )
+            for row_cp_id in range(reference.schedule.ncp)
+        )
+        groups.append((members, screened))
+    screened_repeated = [
+        members for members, screened in groups
+        if screened and members.size > 1
+    ]
+    assert screened_repeated
+    primary = min(screened_repeated, key=lambda values: int(values[0]))
+    remainder = scheduled[~np.isin(scheduled, primary[:2])]
+    master = np.concatenate((primary[:2], remainder))[:32]
+    assert master.size == 32
+    master_keys = np.stack((
+        reference.schedule.pair_cp_id[master],
+        reference.schedule.pair_task_id[master],
+    ), axis=1)
+    _, master_counts = np.unique(master_keys, axis=0, return_counts=True)
+    assert np.any(master_counts > 1)
+
+    reference_batches = {}
+    grouped_batches = {}
+    reference_diagonal = grouped_diagonal = None
+    for selected_count in (1, 2, 8, 32):
+        pivots = master[:selected_count]
+        reference_batches[selected_count] = reference.columns(pivots)
+        grouped_batches[selected_count] = grouped.columns(pivots)
+        if selected_count == 2:
+            reference_diagonal = reference.diagonal()
+            grouped_diagonal = grouped.diagonal()
+    cupy.cuda.runtime.deviceSynchronize()
+
+    for selected_count in (1, 2, 8, 32):
+        error = float(cupy.max(cupy.abs(
+            grouped_batches[selected_count]
+            - reference_batches[selected_count]
+        )).item())
+        assert error <= 2e-10
+    assert reference_diagonal is not None and grouped_diagonal is not None
+    assert float(cupy.max(cupy.abs(
+        grouped_diagonal - reference_diagonal
+    )).item()) <= 2e-10
+
+    reference_cd = pivoted_cholesky_from_columns(
+        reference,
+        threshold=1e-8,
+        max_rank=8,
+        column_batch_size=8,
+        transfer_counter=TransferCounter(),
+    )
+    grouped_cd = pivoted_cholesky_from_columns(
+        grouped,
+        threshold=1e-8,
+        max_rank=8,
+        column_batch_size=8,
+        transfer_counter=TransferCounter(),
+    )
+    cupy.cuda.runtime.deviceSynchronize()
+    assert grouped_cd.pivots == reference_cd.pivots
+    assert grouped_cd.rank == reference_cd.rank
+    assert abs(
+        grouped_cd.residual_diagonal - reference_cd.residual_diagonal
+    ) <= 2e-10
+
+    metadata = grouped.metadata()
+    assert metadata["high_rys_workspace"]["maximum_rys_order"] == 7
+    assert metadata["high_rys_workspace"]["resident"] is True
+    assert metadata["stream_safety"]["per_call_device_synchronize"] is False
+    assert metadata["precutoff_column_gout_attempts"] > (
+        metadata["column_gout_evaluations"]
+    )
+    assert metadata["grouped_gout_evaluations_saved"] > 0
+    assert metadata["performance_eligible"] is False

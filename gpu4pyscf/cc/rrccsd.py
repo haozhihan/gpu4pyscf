@@ -30,6 +30,7 @@ pass their water2 timing gates.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from functools import reduce
 import math
 from typing import Any, Dict, Optional
@@ -47,14 +48,19 @@ from gpu4pyscf.cc.gint_pair_columns import GINTAOPairColumnProvider
 from gpu4pyscf.cc.gint_selected_columns import GINTSelectedAOPairColumnProvider
 from gpu4pyscf.cc.gint_transfer_audit import RUNTIME_GATE_EXECUTION_MODES
 from gpu4pyscf.cc.integrals import MOThreeIndexIntegralProvider
-from gpu4pyscf.cc.lowrank import RRDoubles, RRProjector, build_rr_projector
+from gpu4pyscf.cc.lowrank import (
+    RRDoubles,
+    RRProjector,
+    build_rr_projector,
+    pair_matrix_from_t2,
+)
 from gpu4pyscf.cc.residual_evaluator import (
     evaluate_dense_ccsd_residual,
     labeled_low_rank_residuals,
 )
 from gpu4pyscf.cc.rr_engine import RRCCSDIterationEngine
 from gpu4pyscf.cc.rr_projector import MP2PairOperator, build_rr_projector_lanczos
-from gpu4pyscf.cc.rr_residual import rr_ccsd_energy
+from gpu4pyscf.cc.rr_residual import ProjectedPairDenominator, rr_ccsd_energy
 
 
 def _array_module(array: Any):
@@ -64,6 +70,29 @@ def _array_module(array: Any):
 
         return cupy
     return np
+
+
+def _array_backend_device_identity(array: Any) -> tuple[str, Optional[int]]:
+    """Return a stable cache identity for a NumPy or CuPy array location."""
+
+    xp = _array_module(array)
+    if xp is np:
+        return "numpy", None
+    device = getattr(array, "device", None)
+    device_id = getattr(device, "id", None)
+    if device_id is None:
+        raise TypeError("a CuPy array must expose its CUDA device identity")
+    return "cupy", int(device_id)
+
+
+def _array_device_scope(array: Any):
+    """Select an array's CUDA device while preserving the caller's device."""
+
+    backend, device_id = _array_backend_device_identity(array)
+    if backend == "numpy":
+        return nullcontext()
+    xp = _array_module(array)
+    return xp.cuda.Device(device_id)
 
 
 def _finite_float(name: str, value: Any, *, positive: bool = False) -> float:
@@ -257,6 +286,154 @@ def _transfer_ledger_delta(
     }
 
 
+def _canonical_rr_galerkin_step(
+    current_t2: Any,
+    jacobi_t2: Any,
+    projector: RRProjector,
+    orbital_energy_differences: Any,
+    *,
+    denominator: Optional[ProjectedPairDenominator] = None,
+    transfer_counter: Any = None,
+) -> tuple[RRDoubles, ProjectedPairDenominator]:
+    """Apply one dense validation update for the RR Galerkin equation.
+
+    A canonical CCSD update supplies the Jacobi candidate ``J2(T)``.  The raw
+    doubles equation residual at the current state is
+
+    ``R2(T) = D2 * (J2(T) - T2)``,
+
+    where ``D2[(ia),(jb)] = eia[ia] + eia[jb]``.  The RR update solves
+
+    ``K dC + dC K = U.H R2(T) U`` with ``K = U.H diag(eia) U``
+
+    and returns ``C + dC``.  Its fixed point is therefore the Galerkin
+    equation ``U.H R2(T) U = 0``.  Projecting ``J2`` directly would instead
+    impose a denominator-weighted Petrov condition when the pair denominators
+    are non-uniform.
+
+    This helper deliberately accepts dense tensors: it is the canonical
+    validation path, not the reduced-scaling direct-CD implementation.
+    """
+
+    if getattr(current_t2, "ndim", None) != 4:
+        raise ValueError("current_t2 must have shape (nocc,nocc,nvir,nvir)")
+    nocc, nocc_j, nvir, nvir_b = (
+        int(value) for value in current_t2.shape
+    )
+    if nocc != nocc_j or nvir != nvir_b:
+        raise ValueError("current_t2 occupied and virtual dimensions must be square")
+    if getattr(jacobi_t2, "shape", None) != current_t2.shape:
+        raise ValueError("jacobi_t2 must match current_t2")
+    if getattr(orbital_energy_differences, "shape", None) != (nocc, nvir):
+        raise ValueError(
+            "orbital_energy_differences must have shape (nocc,nvir)"
+        )
+    if projector.full_dimension != nocc * nvir:
+        raise ValueError("projector pair dimension does not match current_t2")
+
+    vectors = projector.vectors
+    xp = _array_module(current_t2)
+    location = _array_backend_device_identity(current_t2)
+    if any(
+        _array_module(value) is not xp
+        or _array_backend_device_identity(value) != location
+        for value in (jacobi_t2, orbital_energy_differences, vectors)
+    ):
+        raise TypeError(
+            "canonical RR tensors, projector, and denominators need one "
+            "backend and device"
+        )
+    dtypes = tuple(
+        np.dtype(value.dtype)
+        for value in (
+            current_t2,
+            jacobi_t2,
+            orbital_energy_differences,
+            vectors,
+        )
+    )
+    if any(np.issubdtype(dtype, np.complexfloating) for dtype in dtypes):
+        raise NotImplementedError(
+            "the canonical RR Galerkin validation path supports real RHF only"
+        )
+    if any(not np.issubdtype(dtype, np.floating) for dtype in dtypes):
+        raise TypeError("canonical RR Galerkin tensors must be floating point")
+
+    with _array_device_scope(current_t2):
+        if denominator is None:
+            denominator = ProjectedPairDenominator.build(
+                projector,
+                orbital_energy_differences,
+                nocc,
+                nvir,
+                transfer_counter=transfer_counter,
+            )
+        elif (
+            denominator.nocc != nocc
+            or denominator.nvir != nvir
+            or denominator.rank != projector.rank
+            or _array_module(denominator.matrix) is not xp
+            or _array_backend_device_identity(denominator.matrix) != location
+        ):
+            raise ValueError("cached projected denominator does not match RR space")
+
+        pair_update = pair_matrix_from_t2(jacobi_t2 - current_t2)
+        pair_denominator = orbital_energy_differences.reshape(-1)
+        raw_residual = (
+            pair_denominator[:, None] + pair_denominator[None, :]
+        ) * pair_update
+        projected_residual = vectors.T.conj() @ raw_residual @ vectors
+        delta_core = denominator.solve(
+            projected_residual,
+            transfer_counter=transfer_counter,
+        )
+        current_core = RRDoubles.from_t2(current_t2, projector).core
+        updated_core = current_core + delta_core
+        updated_core = (updated_core + updated_core.T.conj()) * 0.5
+        return (
+            RRDoubles(projector, updated_core, nocc, nvir),
+            denominator,
+        )
+
+
+def _canonical_rr_convergence_gate(
+    iterative_converged: bool,
+    projected_equation_residual: Any,
+    tolerance: Any,
+) -> tuple[bool, dict[str, Any]]:
+    """Fail closed when the final raw Galerkin residual misses its contract."""
+
+    threshold = _finite_float("conv_tol_normt", tolerance, positive=True)
+    try:
+        residual = _finite_float(
+            "projected_equation_residual", projected_equation_residual
+        )
+    except (TypeError, ValueError, OverflowError):
+        return False, {
+            "measurement": "raw-projected-equation-residual",
+            "residual_norm": None,
+            "threshold": threshold,
+            "available": False,
+            "passed": False,
+            "failure_reason": "missing-or-invalid-residual",
+            "iterative_solver_converged_before_gate": bool(
+                iterative_converged
+            ),
+            "reported_converged": False,
+        }
+    passed = residual <= threshold
+    reported = bool(iterative_converged) and passed
+    return reported, {
+        "measurement": "raw-projected-equation-residual",
+        "residual_norm": residual,
+        "threshold": threshold,
+        "available": True,
+        "passed": passed,
+        "iterative_solver_converged_before_gate": bool(iterative_converged),
+        "reported_converged": reported,
+    }
+
+
 class RRCCSD(ccsd_incore.CCSD):
     """RCCSD constrained to a fixed MP2 doubles eigenspace.
 
@@ -276,6 +453,10 @@ class RRCCSD(ccsd_incore.CCSD):
         ``"selected"`` uses the bounded batched selected-shell C ABI.
         ``"restricted-reference"`` retains the earlier one-column reference
         provider for numerical comparisons.
+    gint_column_kernel
+        ``"reference"`` retains the qualified one-pivot-per-GOUT kernel.
+        ``"grouped"`` reuses GOUT across pivots with the same ket shell task;
+        it remains performance-ineligible until the fixed A100 A/B gate.
     gint_max_batch_size
         Maximum number of selected AO-pair columns evaluated in one blocked
         pivoted-Cholesky request.
@@ -302,6 +483,7 @@ class RRCCSD(ccsd_incore.CCSD):
         "direct_scf_tol",
         "cd_max_rank",
         "gint_column_backend",
+        "gint_column_kernel",
         "gint_group_size",
         "gint_max_block_bytes",
         "gint_max_batch_size",
@@ -329,6 +511,7 @@ class RRCCSD(ccsd_incore.CCSD):
         "projected_jacobi_update_norm",
         "full_space_jacobi_update_norm",
         "representation_residual",
+        "rr_history",
         "full_space_diagnostic_metadata",
         "run_metrics",
     }
@@ -345,6 +528,7 @@ class RRCCSD(ccsd_incore.CCSD):
         direct_scf_tol: float = 1e-13,
         cd_max_rank: Optional[int] = None,
         gint_column_backend: str = "selected",
+        gint_column_kernel: str = "reference",
         gint_group_size: int = 16,
         gint_max_block_bytes: Optional[int] = None,
         gint_max_batch_size: int = 32,
@@ -396,6 +580,18 @@ class RRCCSD(ccsd_incore.CCSD):
             raise ValueError(
                 "gint_column_backend must be 'selected' or "
                 "'restricted-reference'"
+            )
+        gint_column_kernel = str(gint_column_kernel).strip().lower()
+        if gint_column_kernel not in {"reference", "grouped"}:
+            raise ValueError(
+                "gint_column_kernel must be 'reference' or 'grouped'"
+            )
+        if (
+            gint_column_backend != "selected"
+            and gint_column_kernel != "reference"
+        ):
+            raise ValueError(
+                "gint_column_kernel applies only to the selected GINT backend"
             )
         gint_runtime_execution_mode = str(
             gint_runtime_execution_mode
@@ -466,6 +662,7 @@ class RRCCSD(ccsd_incore.CCSD):
         self.direct_scf_tol = direct_scf_tol
         self.cd_max_rank = cd_max_rank
         self.gint_column_backend = gint_column_backend
+        self.gint_column_kernel = gint_column_kernel
         self.gint_group_size = gint_group_size
         self.gint_max_block_bytes = gint_max_block_bytes
         self.gint_max_batch_size = gint_max_batch_size
@@ -509,6 +706,14 @@ class RRCCSD(ccsd_incore.CCSD):
         self._direct_cholesky_metadata: Optional[dict[str, Any]] = None
         self._rr_projector_build_metadata: Optional[dict[str, Any]] = None
         self._mp2_initial_metadata: Optional[dict[str, Any]] = None
+        self._canonical_projected_denominator: Optional[
+            ProjectedPairDenominator
+        ] = None
+        self._canonical_projected_denominator_key: Optional[
+            tuple[int, int, int, int, float, str, Optional[int]]
+        ] = None
+        self._canonical_orbital_energy_differences: Any = None
+        self._canonical_galerkin_final_gate: Optional[dict[str, Any]] = None
         self.run_metrics = RunMetrics(
             self.__class__.__name__, metadata=self.method_metadata()
         )
@@ -529,6 +734,10 @@ class RRCCSD(ccsd_incore.CCSD):
         self._direct_cholesky_metadata = None
         self._rr_projector_build_metadata = None
         self._mp2_initial_metadata = None
+        self._canonical_projected_denominator = None
+        self._canonical_projected_denominator_key = None
+        self._canonical_orbital_energy_differences = None
+        self._canonical_galerkin_final_gate = None
         self.projected_equation_residual = None
         self.full_space_residual = None
         self.projected_jacobi_update_norm = None
@@ -614,6 +823,7 @@ class RRCCSD(ccsd_incore.CCSD):
                     "threshold": self.eri_tol,
                     "max_rank": self.cd_max_rank,
                     "gint_column_backend": self.gint_column_backend,
+                    "gint_column_kernel": self.gint_column_kernel,
                     "gint_group_size": self.gint_group_size,
                     "gint_max_block_bytes": self.gint_max_block_bytes,
                     "gint_max_batch_size": self.gint_max_batch_size,
@@ -662,6 +872,37 @@ class RRCCSD(ccsd_incore.CCSD):
                 )
                 if provider_gate is not None:
                     metadata["provider_runtime_gate"] = dict(provider_gate)
+        else:
+            galerkin = {
+                "role": "dense-canonical-validation",
+                "doubles_residual": "R2(T)=D2*(J2(T)-T2)",
+                "update_equation": (
+                    "K*delta_C+delta_C*K=U.H*R2(T)*U; "
+                    "K=U.H*diag(e_i-e_a-level_shift)*U"
+                ),
+                "fixed_point": "U.H*R2(T)*U=0",
+                "singles_update": "canonical-Jacobi",
+                "dense_t2_materialized": True,
+                "projected_denominator_cached": (
+                    self._canonical_projected_denominator is not None
+                ),
+                "final_raw_projected_residual_gate": "conv_tol_normt",
+            }
+            if self._canonical_projected_denominator is not None:
+                galerkin["projected_denominator"] = (
+                    self._canonical_projected_denominator.metadata()
+                )
+                cache_key = self._canonical_projected_denominator_key
+                if cache_key is not None:
+                    galerkin["projected_denominator_location"] = {
+                        "backend": cache_key[-2],
+                        "device_id": cache_key[-1],
+                    }
+            if self._canonical_galerkin_final_gate is not None:
+                galerkin["final_gate"] = dict(
+                    self._canonical_galerkin_final_gate
+                )
+            metadata["canonical_rr_galerkin"] = galerkin
         for key, value in (
             ("active_space", self._active_space_metadata),
             ("ao_pair_provider", self._ao_pair_provider_metadata),
@@ -774,6 +1015,7 @@ class RRCCSD(ccsd_incore.CCSD):
                         direct_scf_tol=self.direct_scf_tol,
                         group_size=self.gint_group_size,
                         max_batch_size=self.gint_max_batch_size,
+                        column_kernel=self.gint_column_kernel,
                         transfer_counter=self.run_metrics.transfers,
                         runtime_gate_receipt=self.gint_runtime_gate_receipt,
                         runtime_execution_mode=self.gint_runtime_execution_mode,
@@ -907,6 +1149,10 @@ class RRCCSD(ccsd_incore.CCSD):
                 f"RR projector orthogonality error {error:.3e} exceeds 1e-10"
             )
         self.rr_projector = projector
+        self._canonical_projected_denominator = None
+        self._canonical_projected_denominator_key = None
+        self._canonical_orbital_energy_differences = None
+        self._canonical_galerkin_final_gate = None
         return projector
 
     def _build_cd_projector(
@@ -990,6 +1236,10 @@ class RRCCSD(ccsd_incore.CCSD):
         build_metadata["denominator_effective_max_rank"] = denominator_cap
         self._mp2_operator = operator
         self.rr_projector = projector
+        self._canonical_projected_denominator = None
+        self._canonical_projected_denominator_key = None
+        self._canonical_orbital_energy_differences = None
+        self._canonical_galerkin_final_gate = None
         self._rr_projector_build_metadata = build_metadata
         return operator, projector
 
@@ -1085,6 +1335,102 @@ class RRCCSD(ccsd_incore.CCSD):
 
         return ccsd_incore.update_amps(self, t1, t2, eris)
 
+    def _canonical_galerkin_denominator(
+        self,
+        t2: Any,
+        eris: Any,
+    ) -> tuple[Any, ProjectedPairDenominator]:
+        """Return the fixed RR Lyapunov operator for a canonical run."""
+
+        if self.rr_projector is None:
+            raise RuntimeError("RR projector has not been initialized")
+        nocc, nvir = int(t2.shape[0]), int(t2.shape[2])
+        xp = _array_module(t2)
+        location = _array_backend_device_identity(t2)
+        if _array_backend_device_identity(self.rr_projector.vectors) != location:
+            raise TypeError(
+                "canonical RR amplitudes and projector need one backend and device"
+            )
+        cache_key = (
+            id(self.rr_projector),
+            id(eris),
+            nocc,
+            nvir,
+            float(self.level_shift),
+            location[0],
+            location[1],
+        )
+        if (
+            self._canonical_projected_denominator is not None
+            and self._canonical_orbital_energy_differences is not None
+            and self._canonical_projected_denominator_key == cache_key
+        ):
+            cached_locations = (
+                _array_backend_device_identity(
+                    self._canonical_projected_denominator.matrix
+                ),
+                _array_backend_device_identity(
+                    self._canonical_orbital_energy_differences
+                ),
+            )
+            if any(cached != location for cached in cached_locations):
+                raise RuntimeError(
+                    "canonical projected denominator cache changed array location"
+                )
+            return (
+                self._canonical_orbital_energy_differences,
+                self._canonical_projected_denominator,
+            )
+
+        with _array_device_scope(t2):
+            mo_energy = eris.mo_energy
+            if xp is np:
+                if _array_module(mo_energy) is not np:
+                    raise TypeError(
+                        "refusing an implicit device-to-host orbital-energy transfer"
+                    )
+                mo_energy = np.asarray(mo_energy)
+            elif _array_module(mo_energy) is xp:
+                if _array_backend_device_identity(mo_energy) != location:
+                    raise TypeError(
+                        "canonical RR orbital energies are on another CUDA device"
+                    )
+            else:
+                mo_energy = _resident_array(
+                    mo_energy,
+                    xp,
+                    self.run_metrics.transfers,
+                    operation="canonical_rr_orbital_energies",
+                )
+            if getattr(mo_energy, "shape", None) is None or len(mo_energy) < (
+                nocc + nvir
+            ):
+                raise ValueError(
+                    "canonical ERI orbital energies do not match amplitudes"
+                )
+            occupied = mo_energy[:nocc]
+            virtual = mo_energy[nocc:nocc + nvir]
+            eia = (
+                occupied[:, None]
+                - virtual[None, :]
+                - float(self.level_shift)
+            )
+            self._canonical_projected_denominator = (
+                ProjectedPairDenominator.build(
+                    self.rr_projector,
+                    eia,
+                    nocc,
+                    nvir,
+                    transfer_counter=self.run_metrics.transfers,
+                )
+            )
+            self._canonical_projected_denominator_key = cache_key
+            self._canonical_orbital_energy_differences = eia
+            self.run_metrics.increment(
+                "canonical_rr_projected_denominator_builds"
+            )
+            return eia, self._canonical_projected_denominator
+
     def update_amps(self, t1: Any, t2: Any, eris: Any):
         if self.eri_backend == "cd":
             if eris is not self._cd_integrals or self._rr_engine is None:
@@ -1098,7 +1444,27 @@ class RRCCSD(ccsd_incore.CCSD):
         with nvtx_range("rr/dense-residual-validation"):
             with self.run_metrics.phase("dense_residual_validation"):
                 t1new, t2new = self._dense_update(t1, t2, eris)
-        return t1new, self._project_doubles(t2new)
+        with _array_device_scope(t2):
+            eia, denominator = self._canonical_galerkin_denominator(t2, eris)
+            with nvtx_range("rr/canonical-galerkin-solve"):
+                with self.run_metrics.phase("canonical_rr_galerkin_solve"):
+                    updated, cached = _canonical_rr_galerkin_step(
+                        t2,
+                        t2new,
+                        self.rr_projector,
+                        eia,
+                        denominator=denominator,
+                        transfer_counter=self.run_metrics.transfers,
+                    )
+            if cached is not denominator:  # pragma: no cover - private invariant
+                raise AssertionError(
+                    "canonical projected denominator cache was replaced"
+                )
+            self.run_metrics.increment("canonical_rr_galerkin_updates")
+            # Retain the representation hook used by the canonical THC
+            # validation subclass.  For RRCCSD this is idempotent.
+            projected = self._project_doubles(updated.reconstruct_t2())
+        return t1new, projected
 
     def energy(self, t1: Any = None, t2: Any = None, eris: Any = None):
         if self.eri_backend != "cd":
@@ -1403,6 +1769,13 @@ class RRCCSD(ccsd_incore.CCSD):
                 self.full_space_jacobi_update_norm = (
                     residual.full_space_jacobi_update_norm
                 )
+        self.converged, self._canonical_galerkin_final_gate = (
+            _canonical_rr_convergence_gate(
+                bool(getattr(self, "converged", False)),
+                self.projected_equation_residual,
+                self.conv_tol_normt,
+            )
+        )
         self._store_doubles(final_doubles)
         self.run_metrics.metadata = self.method_metadata()
         return e_corr, final_t1, final_doubles

@@ -30,6 +30,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import socket
 import stat
@@ -38,13 +39,13 @@ from typing import Any, Mapping, Optional
 
 
 RUNTIME_GATE_RECEIPT_SCHEMA = (
-    "gpu4pyscf.gint-selected-runtime-gate-receipt.v1"
+    "gpu4pyscf.gint-selected-runtime-gate-receipt.v2"
 )
 RUNTIME_GATE_PAYLOAD_SCHEMA = (
-    "gpu4pyscf.gint-selected-runtime-gate-payload.v1"
+    "gpu4pyscf.gint-selected-runtime-gate-payload.v2"
 )
 RUNTIME_GATE_SIDECAR_SUFFIX = ".sha256"
-RELEASE_PIN_SCHEMA = "gpu4pyscf.gint-selected-runtime-release-pin.v1"
+RELEASE_PIN_SCHEMA = "gpu4pyscf.gint-selected-runtime-release-pin.v2"
 RELEASE_PIN_RELATIVE_PATH = Path("gpu4pyscf/cc/gint_release_pin.json")
 PUBLICATION_ATTESTATION_SCHEMA = "gpu4pyscf.snapshot-publication-attestation.v1"
 PUBLICATION_ATTESTATION_SUFFIX = ".publication-attestation.json"
@@ -73,10 +74,24 @@ PUBLICATION_ATTESTATION_KEYS = frozenset({
 DIRECTORY_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
 NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 RELEASE_RUNTIME_OBSERVATION_SCHEMA = (
-    "gpu4pyscf.gint-selected-release-runtime-observation.v1"
+    "gpu4pyscf.gint-selected-release-runtime-observation.v2"
 )
 RELEASE_RUNTIME_CONTRACT_SCHEMA = (
-    "gpu4pyscf.gint-selected-release-runtime-contract.v1"
+    "gpu4pyscf.gint-selected-release-runtime-contract.v2"
+)
+GINT_GATE_RESULT_SCHEMA = "gpu4pyscf.water2.gint-direct-cd-gate.v3"
+SCONTROL_HELPER_SCHEMA = "gpu4pyscf.controlled-scontrol-helper.v2"
+SCONTROL_LOADER_EVIDENCE_SCHEMA = (
+    "gpu4pyscf.controlled-scontrol-loader-evidence.v1"
+)
+SCONTROL_ELF_LOADER_POLICY_SCHEMA = (
+    "gpu4pyscf.controlled-scontrol-elf-loader-policy.v1"
+)
+SCONTROL_HELPER_TRUST_BOUNDARY = (
+    "task-root-owner-and-root-are-trusted-cooperators"
+)
+THREAD_AFFINITY_OBSERVATION_SCHEMA = (
+    "gpu4pyscf.linux-thread-affinity-observation.v1"
 )
 SOURCE_SNAPSHOT_SCHEMA = "gpu4pyscf.source-snapshot.v3"
 SOURCE_NORMALIZATION_SCHEMA = "gpu4pyscf.source-symlink-normalization.v1"
@@ -85,14 +100,51 @@ RUNTIME_GATE_EXECUTION_MODES = frozenset({
     "release-gate",
     "consumer-benchmark",
     "consumer-counterpoise",
+    "consumer-thc-complete-audit",
 })
 _EXPECTED_RELEASE_PARTITION = "mrigpu"
-_EXPECTED_RELEASE_NODE = "compute-1-6"
+_ALLOWED_RELEASE_NODES = frozenset({
+    "compute-1-0",
+    "compute-1-2",
+    "compute-1-3",
+    "compute-1-5",
+    "compute-1-6",
+})
 _EXPECTED_RELEASE_AFFINITY = "24-31"
 _EXPECTED_RELEASE_NUMA_NODE = 3
 _PCI_SYSFS_DEVICES = Path("/sys/bus/pci/devices")
 _NODE_SYSFS_DEVICES = Path("/sys/devices/system/node")
-_SCONTROL_PATH = Path("/usr/bin/scontrol")
+_SCONTROL_DISTRIBUTION_RELATIVE_PATH = Path(
+    "control-tools/slurm-23.02.4-local-rpath-v1"
+)
+_SCONTROL_RELATIVE_PATH = (
+    _SCONTROL_DISTRIBUTION_RELATIVE_PATH / "bin" / "scontrol"
+)
+_SCONTROL_LIBRARY_RELATIVE_PATH = Path(
+    _SCONTROL_DISTRIBUTION_RELATIVE_PATH / "lib" / "libslurmfull.so"
+)
+_SCONTROL_SHA256 = (
+    "12259ab80333f9c1b7033747bde5b5b3bb9d73e5b6453f3e4049a4597cdddcdf"
+)
+_SCONTROL_BYTES = 1_128_736
+_SCONTROL_LIBRARY_SHA256 = (
+    "722e5978486e5231ed1e1cae497f0a860858695ee69e4caef1c9525075b1dee2"
+)
+_SCONTROL_LIBRARY_BYTES = 12_187_568
+_SCONTROL_ELF_LOADER_POLICY = {
+    "schema": SCONTROL_ELF_LOADER_POLICY_SCHEMA,
+    "dynamic_tag": "DT_RPATH",
+    "search_path": "$ORIGIN/../lib",
+    "needed_soname": "libslurmfull.so",
+    "mapping_evidence": "glibc-LD_DEBUG=libs-calling-init",
+}
+_SCONTROL_DIRECTORY_RELATIVE_PATHS = {
+    "control_tools": Path("control-tools"),
+    "distribution": _SCONTROL_DISTRIBUTION_RELATIVE_PATH,
+    "bin": _SCONTROL_DISTRIBUTION_RELATIVE_PATH / "bin",
+    "lib": _SCONTROL_DISTRIBUTION_RELATIVE_PATH / "lib",
+}
+_PROC_SELF_TASK = Path("/proc/self/task")
 _RELEASE_ENVIRONMENT_NAMES = (
     "SLURM_JOB_ID",
     "SLURM_JOB_NAME",
@@ -106,7 +158,29 @@ _RELEASE_ENVIRONMENT_NAMES = (
     "CCSD_TOPOLOGY_SHA256",
     "CCSD_BOUND_CPUS",
     "GPU4PYSCF_NUMA",
+    "CCSD_SCONTROL_PATH",
 )
+
+
+def _release_node_contract_errors(runtime_contract: Any) -> list[str]:
+    """Validate a receipt-pinned qualification node without choosing one."""
+    if not isinstance(runtime_contract, Mapping):
+        return ["release pin runtime contract is unavailable"]
+
+    node = runtime_contract.get("node")
+    host = runtime_contract.get("host")
+    errors = []
+    if node not in _ALLOWED_RELEASE_NODES:
+        errors.append(
+            "qualification node is outside the approved MTU A100 nodes"
+        )
+    if host != node:
+        errors.append(
+            "qualification host differs from its pinned Slurm node"
+        )
+    return errors
+
+
 _SOURCE_SUFFIXES = {
     ".c", ".cc", ".cpp", ".cu", ".cuh", ".h", ".hpp", ".ini",
     ".json", ".md", ".py", ".pyx", ".pxd", ".sbatch", ".sh",
@@ -378,6 +452,847 @@ def _parse_cpu_list(value: Any) -> tuple[int, ...]:
     return tuple(sorted(result))
 
 
+def _status_cpu_list(path: Path) -> str:
+    for line in path.read_text(encoding="utf-8").splitlines():
+        key, separator, value = line.partition(":")
+        if separator and key == "Cpus_allowed_list":
+            cpus = _parse_cpu_list(value.strip())
+            if not cpus:
+                raise ValueError(f"{path} has an empty Cpus_allowed_list")
+            return _format_cpu_list(cpus)
+    raise ValueError(f"{path} has no Cpus_allowed_list")
+
+
+def observe_process_thread_affinity(
+    task_directory: Optional[os.PathLike[str] | str] = None,
+) -> dict[str, Any]:
+    """Read one stable, fail-closed ``/proc/self/task`` affinity snapshot.
+
+    Linux affinity is a per-thread property.  OpenMP may pin the Python caller
+    to one CPU while its workers cover the complete requested CPU set, so
+    ``sched_getaffinity(0)`` is not a process-wide observation.  A changing
+    task inventory or a vanished worker invalidates this sample rather than
+    being silently treated as a smaller process affinity.
+    """
+
+    root = _PROC_SELF_TASK if task_directory is None else Path(task_directory)
+    errors: list[str] = []
+    threads: list[dict[str, Any]] = []
+    before: tuple[str, ...] = ()
+    after: tuple[str, ...] = ()
+    try:
+        before = tuple(sorted(
+            (item.name for item in root.iterdir() if item.name.isdigit()),
+            key=int,
+        ))
+        if not before:
+            raise RuntimeError("no Linux threads were visible")
+        for name in before:
+            status_path = root / name / "status"
+            threads.append({
+                "tid": int(name),
+                "affinity": _status_cpu_list(status_path),
+            })
+        after = tuple(sorted(
+            (item.name for item in root.iterdir() if item.name.isdigit()),
+            key=int,
+        ))
+        if after != before:
+            raise RuntimeError(
+                "Linux thread inventory changed while affinity was sampled"
+            )
+    except Exception as exc:
+        errors.append(f"thread affinity snapshot failed: {exc}")
+
+    expected = set(_parse_cpu_list(_EXPECTED_RELEASE_AFFINITY))
+    observed_sets: list[set[int]] = []
+    for item in threads:
+        try:
+            observed_sets.append(set(_parse_cpu_list(item["affinity"])))
+        except Exception as exc:
+            errors.append(
+                f"thread {item.get('tid')} affinity is invalid: {exc}"
+            )
+    union = set().union(*observed_sets) if observed_sets else set()
+    all_subset = bool(observed_sets) and all(
+        cpus.issubset(expected) for cpus in observed_sets
+    )
+    covers_expected = expected.issubset(union)
+    if not all_subset:
+        errors.append("one or more thread affinities leave CPUs 24-31")
+    if not covers_expected:
+        errors.append("thread-affinity union does not cover CPUs 24-31")
+    return {
+        "schema": THREAD_AFFINITY_OBSERVATION_SCHEMA,
+        "source": "stable-proc-self-task-status",
+        "task_directory": str(root),
+        "thread_count": len(threads),
+        "thread_ids_before": [int(value) for value in before],
+        "thread_ids_after": [int(value) for value in after],
+        "threads": threads,
+        "union_affinity": _format_cpu_list(union),
+        "expected_affinity": _EXPECTED_RELEASE_AFFINITY,
+        "all_threads_within_expected": all_subset,
+        "union_covers_expected": covers_expected,
+        "stable": bool(before) and before == after and not errors,
+        "errors": errors,
+    }
+
+
+def _controlled_directory_binding(
+    path: Path,
+    *,
+    label: str,
+    expected_owner_uid: int,
+    expected_mode: int = 0o555,
+) -> dict[str, Any]:
+    """Bind one sealed helper directory inside the trusted task root."""
+
+    _reject_symlink_components(path, name=label)
+    before = path.lstat()
+    if not stat.S_ISDIR(before.st_mode):
+        raise ValueError(f"{label} must be a directory")
+    if path.resolve(strict=True) != path:
+        raise ValueError(f"{label} path must be canonical")
+    if stat.S_IMODE(before.st_mode) != expected_mode:
+        raise ValueError(f"{label} mode must be {expected_mode:#o}")
+    if before.st_uid != expected_owner_uid:
+        raise ValueError(f"{label} owner differs from the task owner")
+    descriptor = os.open(path, DIRECTORY_FLAGS | NOFOLLOW)
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            opened.st_dev,
+            opened.st_ino,
+            opened.st_mode,
+            opened.st_uid,
+            opened.st_gid,
+            opened.st_nlink,
+        ) != (
+            before.st_dev,
+            before.st_ino,
+            before.st_mode,
+            before.st_uid,
+            before.st_gid,
+            before.st_nlink,
+        ):
+            raise ValueError(f"{label} identity changed while opened")
+    finally:
+        os.close(descriptor)
+    after = path.lstat()
+    if (
+        after.st_dev,
+        after.st_ino,
+        after.st_mode,
+        after.st_uid,
+        after.st_gid,
+        after.st_nlink,
+    ) != (
+        before.st_dev,
+        before.st_ino,
+        before.st_mode,
+        before.st_uid,
+        before.st_gid,
+        before.st_nlink,
+    ):
+        raise ValueError(f"{label} identity changed while observed")
+    return {
+        "path": str(path),
+        "mode": stat.S_IMODE(before.st_mode),
+        "owner_uid": int(before.st_uid),
+        "owner_gid": int(before.st_gid),
+        "hard_links": int(before.st_nlink),
+        "directory_identity": {
+            "device": int(before.st_dev),
+            "inode": int(before.st_ino),
+        },
+    }
+
+
+def _controlled_file_binding(
+    path: Path,
+    *,
+    label: str,
+    expected_sha256: str,
+    expected_bytes: int,
+    expected_owner_uid: int,
+    require_executable: bool,
+    expected_mode: Optional[int] = None,
+) -> dict[str, Any]:
+    _reject_symlink_components(path, name=label)
+    before = path.lstat()
+    execute_bits = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+    write_bits = stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH
+    if not stat.S_ISREG(before.st_mode):
+        raise ValueError(f"{label} must be a regular file")
+    if path.resolve(strict=True) != path:
+        raise ValueError(f"{label} path must be canonical")
+    if before.st_mode & (write_bits | stat.S_ISUID | stat.S_ISGID):
+        raise ValueError(f"{label} has unsafe permission bits")
+    if expected_mode is not None and stat.S_IMODE(before.st_mode) != expected_mode:
+        raise ValueError(f"{label} mode must be {expected_mode:#o}")
+    if before.st_nlink != 1:
+        raise ValueError(f"{label} must have exactly one hard link")
+    if before.st_uid != expected_owner_uid:
+        raise ValueError(f"{label} owner differs from the task owner")
+    if require_executable and (
+        not before.st_mode & execute_bits or not os.access(path, os.X_OK)
+    ):
+        raise ValueError(f"{label} must be executable")
+    descriptor = os.open(path, os.O_RDONLY | NOFOLLOW)
+    try:
+        opened = os.fstat(descriptor)
+        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+            raise ValueError(f"{label} identity changed while opened")
+        digest = hashlib.sha256()
+        size = 0
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            size += len(chunk)
+    finally:
+        os.close(descriptor)
+    after = path.lstat()
+    if (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_mode,
+        after.st_uid,
+        after.st_gid,
+        after.st_nlink,
+    ) != (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_mode,
+        before.st_uid,
+        before.st_gid,
+        before.st_nlink,
+    ):
+        raise ValueError(f"{label} identity changed while read")
+    actual_sha256 = digest.hexdigest()
+    if actual_sha256 != expected_sha256 or size != expected_bytes:
+        raise ValueError(f"{label} content identity mismatch")
+    return {
+        "path": str(path),
+        "sha256": actual_sha256,
+        "bytes": size,
+        "mode": stat.S_IMODE(before.st_mode),
+        "owner_uid": int(before.st_uid),
+        "owner_gid": int(before.st_gid),
+        "hard_links": int(before.st_nlink),
+        "directory_identity": {
+            "device": int(before.st_dev),
+            "inode": int(before.st_ino),
+        },
+    }
+
+
+def observe_scontrol_helper_identity(
+    *, require_library_search_path: bool = True,
+) -> dict[str, Any]:
+    """Validate the explicit MTU ``scontrol`` helper and its private library."""
+
+    errors: list[str] = []
+    task_root: Optional[Path] = None
+    directories: Optional[dict[str, Any]] = None
+    executable: Optional[dict[str, Any]] = None
+    library: Optional[dict[str, Any]] = None
+    library_dir: Optional[Path] = None
+    configured_path = os.getenv("CCSD_SCONTROL_PATH")
+    try:
+        configured_task_root = os.getenv("CCSD_TASK_ROOT")
+        if not configured_task_root:
+            raise ValueError("CCSD_TASK_ROOT is missing")
+        task_root = Path(configured_task_root)
+        if not task_root.is_absolute() or task_root.resolve(strict=True) != task_root:
+            raise ValueError("CCSD_TASK_ROOT must be an absolute canonical path")
+        _reject_symlink_components(task_root, name="controlled helper task root")
+        task_info = task_root.lstat()
+        if not stat.S_ISDIR(task_info.st_mode):
+            raise ValueError("CCSD_TASK_ROOT must be a directory")
+        if task_info.st_uid != os.geteuid():
+            raise ValueError("CCSD_TASK_ROOT must be owned by the current user")
+        directories = {
+            role: _controlled_directory_binding(
+                task_root / relative,
+                label=f"controlled scontrol {role.replace('_', '-')} directory",
+                expected_owner_uid=task_info.st_uid,
+            )
+            for role, relative in _SCONTROL_DIRECTORY_RELATIVE_PATHS.items()
+        }
+        expected_path = task_root / _SCONTROL_RELATIVE_PATH
+        if not configured_path:
+            raise ValueError("CCSD_SCONTROL_PATH is missing")
+        path = Path(configured_path)
+        if not path.is_absolute() or path != expected_path:
+            raise ValueError(
+                "CCSD_SCONTROL_PATH must name the fixed task control helper"
+            )
+        library_path = task_root / _SCONTROL_LIBRARY_RELATIVE_PATH
+        library_dir = library_path.parent
+        executable = _controlled_file_binding(
+            path,
+            label="controlled scontrol executable",
+            expected_sha256=_SCONTROL_SHA256,
+            expected_bytes=_SCONTROL_BYTES,
+            expected_owner_uid=task_info.st_uid,
+            require_executable=True,
+            expected_mode=0o555,
+        )
+        library = _controlled_file_binding(
+            library_path,
+            label="controlled scontrol library",
+            expected_sha256=_SCONTROL_LIBRARY_SHA256,
+            expected_bytes=_SCONTROL_LIBRARY_BYTES,
+            expected_owner_uid=task_info.st_uid,
+            require_executable=False,
+            expected_mode=0o444,
+        )
+        if require_library_search_path:
+            loader_paths = os.getenv("LD_LIBRARY_PATH", "").split(":")
+            if not loader_paths or loader_paths[0] != str(library_dir):
+                raise ValueError(
+                    "controlled scontrol library directory must be first in "
+                    "LD_LIBRARY_PATH"
+                )
+    except Exception as exc:
+        errors.append(str(exc))
+    return {
+        "schema": SCONTROL_HELPER_SCHEMA,
+        "status": "validated" if not errors else "invalid",
+        "trust_boundary": SCONTROL_HELPER_TRUST_BOUNDARY,
+        "task_root": None if task_root is None else str(task_root),
+        "configured_path": configured_path,
+        "library_search_path_prefix": (
+            None if library_dir is None else str(library_dir)
+        ),
+        "elf_loader_policy": deepcopy(_SCONTROL_ELF_LOADER_POLICY),
+        "directories": directories,
+        "executable": executable,
+        "library": library,
+        "errors": errors,
+    }
+
+
+def _portable_filesystem_inode(item: Mapping[str, Any], *, label: str) -> int:
+    identity = item.get("directory_identity")
+    if (
+        not isinstance(identity, Mapping)
+        or set(identity) != {"device", "inode"}
+        or type(identity.get("device")) is not int
+        or identity["device"] < 0
+        or type(identity.get("inode")) is not int
+        or identity["inode"] <= 0
+    ):
+        raise ValueError(f"controlled {label} filesystem identity is invalid")
+    return identity["inode"]
+
+
+def _portable_controlled_file(item: Any, *, label: str) -> dict[str, Any]:
+    if not isinstance(item, Mapping) or set(item) != {
+        "path", "sha256", "bytes", "mode", "owner_uid", "owner_gid",
+        "hard_links", "directory_identity",
+    }:
+        raise ValueError(f"controlled {label} identity shape is invalid")
+    inode = _portable_filesystem_inode(item, label=label)
+    if not _is_sha256(item.get("sha256")):
+        raise ValueError(f"controlled {label} SHA-256 is invalid")
+    for name in ("bytes", "mode", "owner_uid", "owner_gid", "hard_links"):
+        if type(item.get(name)) is not int or item[name] < 0:
+            raise ValueError(f"controlled {label} {name} is invalid")
+    return {
+        key: deepcopy(item[key])
+        for key in (
+            "path", "sha256", "bytes", "mode", "owner_uid",
+            "owner_gid", "hard_links",
+        )
+    } | {"inode": inode}
+
+
+def _portable_controlled_directory(item: Any, *, label: str) -> dict[str, Any]:
+    if not isinstance(item, Mapping) or set(item) != {
+        "path", "mode", "owner_uid", "owner_gid", "hard_links",
+        "directory_identity",
+    }:
+        raise ValueError(f"controlled {label} directory shape is invalid")
+    inode = _portable_filesystem_inode(item, label=f"{label} directory")
+    for name in ("mode", "owner_uid", "owner_gid", "hard_links"):
+        if type(item.get(name)) is not int or item[name] < 0:
+            raise ValueError(f"controlled {label} directory {name} is invalid")
+    return {
+        key: deepcopy(item[key])
+        for key in ("path", "mode", "owner_uid", "owner_gid", "hard_links")
+    } | {"inode": inode}
+
+
+def scontrol_helper_portable_binding(value: Any) -> dict[str, Any]:
+    """Return the helper identity stable across NFS client mount namespaces."""
+
+    if not isinstance(value, Mapping):
+        raise ValueError("controlled scontrol helper evidence is unavailable")
+    expected_keys = {
+        "schema", "status", "trust_boundary", "task_root",
+        "configured_path", "library_search_path_prefix", "elf_loader_policy",
+        "directories", "executable", "library", "errors",
+    }
+    if set(value) != expected_keys or value.get("schema") != SCONTROL_HELPER_SCHEMA:
+        raise ValueError("controlled scontrol helper evidence shape is invalid")
+    if value.get("status") != "validated" or value.get("errors") != []:
+        raise ValueError("controlled scontrol helper evidence is invalid")
+
+    raw_directories = value.get("directories")
+    if not isinstance(raw_directories, Mapping) or set(raw_directories) != set(
+        _SCONTROL_DIRECTORY_RELATIVE_PATHS
+    ):
+        raise ValueError("controlled scontrol directory chain is invalid")
+
+    portable = {
+        "schema": SCONTROL_HELPER_SCHEMA,
+        "trust_boundary": value.get("trust_boundary"),
+        "task_root": value.get("task_root"),
+        "configured_path": value.get("configured_path"),
+        "library_search_path_prefix": value.get("library_search_path_prefix"),
+        "elf_loader_policy": deepcopy(value.get("elf_loader_policy")),
+        "directories": {
+            role: _portable_controlled_directory(
+                raw_directories.get(role), label=role.replace("_", "-")
+            )
+            for role in _SCONTROL_DIRECTORY_RELATIVE_PATHS
+        },
+        "executable": _portable_controlled_file(
+            value.get("executable"), label="executable"
+        ),
+        "library": _portable_controlled_file(
+            value.get("library"), label="library"
+        ),
+    }
+    _validate_scontrol_helper_portable_binding(portable)
+    return portable
+
+
+def _validate_scontrol_helper_portable_binding(value: Any) -> None:
+    if not isinstance(value, Mapping) or set(value) != {
+        "schema", "trust_boundary", "task_root", "configured_path",
+        "library_search_path_prefix", "elf_loader_policy", "directories",
+        "executable", "library",
+    }:
+        raise ValueError("portable controlled scontrol helper shape is invalid")
+    if value.get("schema") != SCONTROL_HELPER_SCHEMA:
+        raise ValueError("portable controlled scontrol helper schema is invalid")
+    if value.get("trust_boundary") != SCONTROL_HELPER_TRUST_BOUNDARY:
+        raise ValueError("portable controlled scontrol trust boundary is invalid")
+    if value.get("elf_loader_policy") != _SCONTROL_ELF_LOADER_POLICY:
+        raise ValueError("portable controlled scontrol ELF loader policy is invalid")
+    task_root = value.get("task_root")
+    if not isinstance(task_root, str) or not Path(task_root).is_absolute():
+        raise ValueError("portable controlled scontrol task root is invalid")
+    expected_executable = Path(task_root) / _SCONTROL_RELATIVE_PATH
+    expected_library = Path(task_root) / _SCONTROL_LIBRARY_RELATIVE_PATH
+    if value.get("configured_path") != str(expected_executable):
+        raise ValueError("portable controlled scontrol path is invalid")
+    if value.get("library_search_path_prefix") != str(expected_library.parent):
+        raise ValueError("portable controlled scontrol library path is invalid")
+    directories = value.get("directories")
+    if not isinstance(directories, Mapping) or set(directories) != set(
+        _SCONTROL_DIRECTORY_RELATIVE_PATHS
+    ):
+        raise ValueError("portable controlled scontrol directory chain is invalid")
+    directory_owners: set[tuple[int, int]] = set()
+    for role, relative in _SCONTROL_DIRECTORY_RELATIVE_PATHS.items():
+        item = directories.get(role)
+        if not isinstance(item, Mapping) or set(item) != {
+            "path", "mode", "owner_uid", "owner_gid", "hard_links", "inode",
+        }:
+            raise ValueError(
+                f"portable controlled scontrol {role} directory shape is invalid"
+            )
+        if item.get("path") != str(Path(task_root) / relative):
+            raise ValueError(
+                f"portable controlled scontrol {role} directory path is invalid"
+            )
+        if (
+            item.get("mode") != 0o555
+            or type(item.get("owner_uid")) is not int
+            or item["owner_uid"] < 0
+            or type(item.get("owner_gid")) is not int
+            or item["owner_gid"] < 0
+            or type(item.get("hard_links")) is not int
+            or item["hard_links"] < 1
+            or type(item.get("inode")) is not int
+            or item["inode"] <= 0
+        ):
+            raise ValueError(
+                f"portable controlled scontrol {role} directory metadata is invalid"
+            )
+        directory_owners.add((item["owner_uid"], item["owner_gid"]))
+    if len(directory_owners) != 1:
+        raise ValueError("portable controlled scontrol directory owners differ")
+    for label, item, expected_path, expected_sha, expected_size, expected_mode in (
+        (
+            "executable", value.get("executable"), expected_executable,
+            _SCONTROL_SHA256, _SCONTROL_BYTES, 0o555,
+        ),
+        (
+            "library", value.get("library"), expected_library,
+            _SCONTROL_LIBRARY_SHA256, _SCONTROL_LIBRARY_BYTES, 0o444,
+        ),
+    ):
+        if not isinstance(item, Mapping) or set(item) != {
+            "path", "sha256", "bytes", "mode", "owner_uid", "owner_gid",
+            "hard_links", "inode",
+        }:
+            raise ValueError(f"portable controlled {label} shape is invalid")
+        if item.get("path") != str(expected_path):
+            raise ValueError(f"portable controlled {label} path is invalid")
+        if item.get("sha256") != expected_sha or item.get("bytes") != expected_size:
+            raise ValueError(f"portable controlled {label} content is invalid")
+        if (
+            item.get("mode") != expected_mode
+            or type(item.get("owner_uid")) is not int
+            or item["owner_uid"] < 0
+            or type(item.get("owner_gid")) is not int
+            or item["owner_gid"] < 0
+            or item.get("hard_links") != 1
+            or type(item.get("inode")) is not int
+            or item["inode"] <= 0
+        ):
+            raise ValueError(f"portable controlled {label} metadata is invalid")
+    if not value["executable"]["mode"] & (
+        stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+    ):
+        raise ValueError("portable controlled executable is not executable")
+    if value["executable"]["owner_uid"] != value["library"]["owner_uid"]:
+        raise ValueError("portable controlled helper owners differ")
+    owner = next(iter(directory_owners))
+    if (
+        value["executable"]["owner_uid"],
+        value["executable"]["owner_gid"],
+    ) != owner or (
+        value["library"]["owner_uid"],
+        value["library"]["owner_gid"],
+    ) != owner:
+        raise ValueError("portable controlled helper directory/file owners differ")
+
+
+def validate_scontrol_helper_portable_binding(value: Any) -> None:
+    """Validate a receipt/pin helper identity without client-local ``st_dev``."""
+
+    _validate_scontrol_helper_portable_binding(value)
+
+
+def _scontrol_loader_evidence(
+    debug_stderr: str,
+    *,
+    child_pid: int,
+    helper_before: Mapping[str, Any],
+    helper_after: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Prove which ``libslurmfull.so`` glibc mapped for one query."""
+
+    if dict(helper_before) != dict(helper_after):
+        raise RuntimeError("controlled scontrol helper changed while queried")
+    helper = scontrol_helper_portable_binding(helper_before)
+    policy = helper["elf_loader_policy"]
+    soname = policy["needed_soname"]
+    candidates: list[tuple[str, str]] = []
+    pattern = re.compile(
+        rf"^\s*{child_pid}:\s+calling init:\s+(.*/{re.escape(soname)})"
+        r"(?:\s+\[0\])?\s*$"
+    )
+    for line in debug_stderr.splitlines():
+        match = pattern.fullmatch(line)
+        if match is not None:
+            candidates.append((line.strip(), match.group(1)))
+    if len(candidates) != 1:
+        raise RuntimeError(
+            "glibc loader evidence did not identify exactly one "
+            f"{soname} mapping"
+        )
+    debug_line, raw_path = candidates[0]
+    if not Path(raw_path).is_absolute():
+        raise RuntimeError("glibc loader reported a non-absolute library path")
+    canonical_path = Path(raw_path).resolve(strict=True)
+    expected_path = Path(str(helper["library"]["path"]))
+    if canonical_path != expected_path:
+        raise RuntimeError(
+            "controlled scontrol mapped libslurmfull from an unexpected path: "
+            f"{canonical_path}"
+        )
+    loaded_library = _controlled_file_binding(
+        canonical_path,
+        label="actually mapped controlled scontrol library",
+        expected_sha256=_SCONTROL_LIBRARY_SHA256,
+        expected_bytes=_SCONTROL_LIBRARY_BYTES,
+        expected_owner_uid=helper["library"]["owner_uid"],
+        require_executable=False,
+        expected_mode=0o444,
+    )
+    if _portable_controlled_file(
+        loaded_library, label="actually mapped library"
+    ) != helper["library"]:
+        raise RuntimeError(
+            "actually mapped libslurmfull identity differs from the helper binding"
+        )
+    encoded_debug = debug_stderr.encode("utf-8")
+    return {
+        "schema": SCONTROL_LOADER_EVIDENCE_SCHEMA,
+        "status": "validated",
+        "source": "glibc-LD_DEBUG=libs-calling-init",
+        "child_pid": child_pid,
+        "task_root": helper["task_root"],
+        "soname": soname,
+        "elf_loader_policy": deepcopy(policy),
+        "raw_loaded_path": raw_path,
+        "canonical_loaded_path": str(canonical_path),
+        "library": loaded_library,
+        "debug_line": debug_line,
+        "debug_stderr_sha256": hashlib.sha256(encoded_debug).hexdigest(),
+        "debug_stderr_bytes": len(encoded_debug),
+        "helper_before": deepcopy(dict(helper_before)),
+        "helper_after": deepcopy(dict(helper_after)),
+        "stable_during_query": True,
+        "errors": [],
+    }
+
+
+def scontrol_loader_portable_binding(value: Any) -> dict[str, Any]:
+    """Return actual-loader evidence stable across clients and process IDs."""
+
+    if not isinstance(value, Mapping) or set(value) != {
+        "schema", "status", "source", "child_pid", "task_root", "soname",
+        "elf_loader_policy", "raw_loaded_path", "canonical_loaded_path",
+        "library", "debug_line", "debug_stderr_sha256",
+        "debug_stderr_bytes", "helper_before", "helper_after",
+        "stable_during_query", "errors",
+    }:
+        raise ValueError("controlled scontrol loader evidence shape is invalid")
+    if (
+        value.get("schema") != SCONTROL_LOADER_EVIDENCE_SCHEMA
+        or value.get("status") != "validated"
+        or value.get("errors") != []
+        or value.get("source") != "glibc-LD_DEBUG=libs-calling-init"
+        or value.get("elf_loader_policy") != _SCONTROL_ELF_LOADER_POLICY
+        or value.get("soname") != _SCONTROL_ELF_LOADER_POLICY["needed_soname"]
+        or type(value.get("child_pid")) is not int
+        or value["child_pid"] <= 0
+        or not _is_sha256(value.get("debug_stderr_sha256"))
+        or type(value.get("debug_stderr_bytes")) is not int
+        or value["debug_stderr_bytes"] <= 0
+        or not isinstance(value.get("debug_line"), str)
+        or "calling init:" not in value["debug_line"]
+        or value.get("stable_during_query") is not True
+        or not isinstance(value.get("raw_loaded_path"), str)
+        or not Path(value["raw_loaded_path"]).is_absolute()
+    ):
+        raise ValueError("controlled scontrol loader evidence is invalid")
+    if dict(value.get("helper_before") or {}) != dict(
+        value.get("helper_after") or {}
+    ):
+        raise ValueError("controlled scontrol helper changed during loader query")
+    query_helper = scontrol_helper_portable_binding(value.get("helper_before"))
+    try:
+        resolved_raw = Path(value["raw_loaded_path"]).resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("controlled scontrol loader path is unavailable") from exc
+    if str(resolved_raw) != value.get("canonical_loaded_path"):
+        raise ValueError("controlled scontrol loader raw path is inconsistent")
+    if value["raw_loaded_path"] not in value["debug_line"]:
+        raise ValueError("controlled scontrol loader debug line is inconsistent")
+    portable = {
+        "schema": SCONTROL_LOADER_EVIDENCE_SCHEMA,
+        "source": value["source"],
+        "task_root": value.get("task_root"),
+        "soname": value["soname"],
+        "elf_loader_policy": deepcopy(value["elf_loader_policy"]),
+        "canonical_loaded_path": value.get("canonical_loaded_path"),
+        "query_helper": query_helper,
+        "library": _portable_controlled_file(
+            value.get("library"), label="actually mapped library"
+        ),
+    }
+    _validate_scontrol_loader_portable_binding(portable)
+    return portable
+
+
+def _validate_scontrol_loader_portable_binding(value: Any) -> None:
+    if not isinstance(value, Mapping) or set(value) != {
+        "schema", "source", "task_root", "soname", "elf_loader_policy",
+        "canonical_loaded_path", "query_helper", "library",
+    }:
+        raise ValueError("portable controlled scontrol loader shape is invalid")
+    task_root = value.get("task_root")
+    expected_path = (
+        Path(task_root) / _SCONTROL_LIBRARY_RELATIVE_PATH
+        if isinstance(task_root, str) and Path(task_root).is_absolute()
+        else None
+    )
+    library = value.get("library")
+    query_helper = value.get("query_helper")
+    if (
+        value.get("schema") != SCONTROL_LOADER_EVIDENCE_SCHEMA
+        or value.get("source") != "glibc-LD_DEBUG=libs-calling-init"
+        or value.get("soname") != _SCONTROL_ELF_LOADER_POLICY["needed_soname"]
+        or value.get("elf_loader_policy") != _SCONTROL_ELF_LOADER_POLICY
+        or expected_path is None
+        or value.get("canonical_loaded_path") != str(expected_path)
+        or not isinstance(query_helper, Mapping)
+        or not isinstance(library, Mapping)
+        or set(library) != {
+            "path", "sha256", "bytes", "mode", "owner_uid", "owner_gid",
+            "hard_links", "inode",
+        }
+        or library.get("path") != str(expected_path)
+        or library.get("sha256") != _SCONTROL_LIBRARY_SHA256
+        or library.get("bytes") != _SCONTROL_LIBRARY_BYTES
+        or library.get("mode") != 0o444
+        or type(library.get("owner_uid")) is not int
+        or library["owner_uid"] < 0
+        or type(library.get("owner_gid")) is not int
+        or library["owner_gid"] < 0
+        or library.get("hard_links") != 1
+        or type(library.get("inode")) is not int
+        or library["inode"] <= 0
+    ):
+        raise ValueError("portable controlled scontrol loader binding is invalid")
+    _validate_scontrol_helper_portable_binding(query_helper)
+    if (
+        query_helper.get("task_root") != task_root
+        or query_helper.get("library") != library
+        or query_helper.get("elf_loader_policy") != value.get("elf_loader_policy")
+    ):
+        raise ValueError("portable scontrol loader/helper binding is inconsistent")
+
+
+def validate_scontrol_loader_portable_binding(value: Any) -> None:
+    """Validate receipt/pin proof of the actually mapped helper library."""
+
+    _validate_scontrol_loader_portable_binding(value)
+
+
+def _thread_affinity_errors(observation: Any, *, label: str) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(observation, Mapping):
+        return [f"current {label} thread-affinity observation is unavailable"]
+    if set(observation) != {
+        "schema", "source", "task_directory", "thread_count",
+        "thread_ids_before", "thread_ids_after", "threads",
+        "union_affinity", "expected_affinity",
+        "all_threads_within_expected", "union_covers_expected", "stable",
+        "errors",
+    }:
+        errors.append(f"current {label} thread-affinity fields are not exact")
+    if observation.get("schema") != THREAD_AFFINITY_OBSERVATION_SCHEMA:
+        errors.append(f"current {label} thread-affinity schema mismatch")
+    if observation.get("source") != "stable-proc-self-task-status":
+        errors.append(f"current {label} thread-affinity source mismatch")
+    if observation.get("task_directory") != str(_PROC_SELF_TASK):
+        errors.append(f"current {label} thread-affinity task path mismatch")
+    threads = observation.get("threads")
+    if not isinstance(threads, list) or not threads:
+        return errors + [f"current {label} thread-affinity set is empty"]
+    if observation.get("thread_count") != len(threads):
+        errors.append(f"current {label} thread-affinity count mismatch")
+    tids: list[int] = []
+    observed_sets: list[set[int]] = []
+    for item in threads:
+        if not isinstance(item, Mapping) or set(item) != {"tid", "affinity"}:
+            errors.append(f"current {label} thread-affinity row is invalid")
+            continue
+        tid = item.get("tid")
+        if type(tid) is not int or tid <= 0 or tid in tids:
+            errors.append(f"current {label} thread id is invalid")
+            continue
+        tids.append(tid)
+        try:
+            cpus = set(_parse_cpu_list(item.get("affinity")))
+            if not cpus:
+                raise ValueError("empty")
+            observed_sets.append(cpus)
+        except Exception:
+            errors.append(f"current {label} thread {tid} affinity is invalid")
+    expected = set(_parse_cpu_list(_EXPECTED_RELEASE_AFFINITY))
+    union = set().union(*observed_sets) if observed_sets else set()
+    all_subset = bool(observed_sets) and all(
+        values.issubset(expected) for values in observed_sets
+    )
+    covers = expected.issubset(union)
+    if not all_subset:
+        errors.append(f"current {label} has a thread outside CPUs 24-31")
+    if not covers:
+        errors.append(f"current {label} thread union does not cover CPUs 24-31")
+    if observation.get("union_affinity") != _format_cpu_list(union):
+        errors.append(f"current {label} thread-affinity union mismatch")
+    if observation.get("expected_affinity") != _EXPECTED_RELEASE_AFFINITY:
+        errors.append(f"current {label} expected thread affinity mismatch")
+    if observation.get("all_threads_within_expected") is not all_subset:
+        errors.append(f"current {label} thread subset verdict mismatch")
+    if observation.get("union_covers_expected") is not covers:
+        errors.append(f"current {label} thread coverage verdict mismatch")
+    if observation.get("thread_ids_before") != tids:
+        errors.append(f"current {label} initial thread inventory mismatch")
+    if observation.get("thread_ids_after") != tids:
+        errors.append(f"current {label} final thread inventory mismatch")
+    if observation.get("stable") is not True or observation.get("errors") != []:
+        errors.append(f"current {label} thread-affinity snapshot is not stable")
+    return errors
+
+
+def _current_scontrol_helper_errors(
+    observation: Any, *, expected: Any, label: str
+) -> list[str]:
+    try:
+        current = scontrol_helper_portable_binding(observation)
+    except Exception as exc:
+        return [f"current {label} controlled scontrol helper is invalid: {exc}"]
+    try:
+        _validate_scontrol_helper_portable_binding(expected)
+    except Exception as exc:
+        return [f"pinned controlled scontrol helper is invalid: {exc}"]
+    if current != expected:
+        return [f"current {label} controlled scontrol helper differs from release pin"]
+    return []
+
+
+def _current_scontrol_loader_errors(
+    observation: Any,
+    *,
+    expected: Any,
+    helper_observation: Any,
+    label: str,
+) -> list[str]:
+    try:
+        current = scontrol_loader_portable_binding(observation)
+    except Exception as exc:
+        return [f"current {label} scontrol loader proof is invalid: {exc}"]
+    try:
+        _validate_scontrol_loader_portable_binding(expected)
+    except Exception as exc:
+        return [f"pinned scontrol loader proof is invalid: {exc}"]
+    try:
+        helper = scontrol_helper_portable_binding(helper_observation)
+    except Exception as exc:
+        return [f"current {label} controlled scontrol helper is invalid: {exc}"]
+    errors: list[str] = []
+    if current != expected:
+        errors.append(
+            f"current {label} actual scontrol library mapping differs from release pin"
+        )
+    if (
+        current.get("library") != helper.get("library")
+        or current.get("elf_loader_policy") != helper.get("elf_loader_policy")
+    ):
+        errors.append(
+            f"current {label} actual scontrol library differs from helper identity"
+        )
+    return errors
+
+
 def _normalise_pci_bus_id(value: Any) -> Optional[str]:
     if isinstance(value, bytes):
         value = value.decode("ascii", errors="strict")
@@ -437,25 +1352,70 @@ def _current_kernel_memory_policy() -> dict[str, Any]:
     }
 
 
-def _query_slurm_controller(job_id: str) -> dict[str, Any]:
+def _query_slurm_controller(
+    job_id: str,
+    *,
+    helper_identity: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
     """Read the live allocation from Slurm rather than trusting job variables."""
 
-    executable = _SCONTROL_PATH
-    info = executable.lstat()
-    if (
-        not stat.S_ISREG(info.st_mode)
-        or executable.resolve(strict=True) != executable
-        or info.st_uid != 0
-        or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
-        or not os.access(executable, os.X_OK)
-    ):
-        raise RuntimeError("the fixed /usr/bin/scontrol executable is untrusted")
-    output = subprocess.check_output(
-        [str(executable), "show", "job", "--oneliner", job_id],
-        text=True,
-        stderr=subprocess.STDOUT,
-        timeout=15,
-    ).strip()
+    before = observe_scontrol_helper_identity()
+    portable_before = scontrol_helper_portable_binding(before)
+    if helper_identity is not None and dict(helper_identity) != before:
+        raise RuntimeError(
+            "caller helper identity differs from the live pre-query identity"
+        )
+    executable = Path(str(portable_before["executable"]["path"]))
+    command_environment = os.environ.copy()
+    library_prefix = str(portable_before["library_search_path_prefix"])
+    for name in tuple(command_environment):
+        if name.startswith("LD_"):
+            command_environment.pop(name, None)
+    command_environment["LD_LIBRARY_PATH"] = library_prefix
+    command_environment["LD_DEBUG"] = "libs"
+    command_environment["LC_ALL"] = "C"
+    process: Optional[subprocess.Popen[bytes]] = None
+    query_error: Optional[Exception] = None
+    stdout_bytes = b""
+    stderr_bytes = b""
+    try:
+        process = subprocess.Popen(
+            [str(executable), "show", "job", "--oneliner", job_id],
+            text=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=command_environment,
+        )
+        try:
+            stdout_bytes, stderr_bytes = process.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+            raise RuntimeError("controlled scontrol query timed out")
+    except Exception as exc:
+        query_error = exc
+    after = observe_scontrol_helper_identity()
+    if after != before:
+        raise RuntimeError("controlled scontrol helper changed while queried")
+    if query_error is not None:
+        raise RuntimeError("controlled scontrol query failed") from query_error
+    if process is None:  # pragma: no cover - guarded by query_error
+        raise RuntimeError("controlled scontrol query did not start")
+    try:
+        output = stdout_bytes.decode("utf-8", errors="strict").strip()
+        debug_stderr = stderr_bytes.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError("controlled scontrol emitted invalid UTF-8") from exc
+    loader_evidence = _scontrol_loader_evidence(
+        debug_stderr,
+        child_pid=process.pid,
+        helper_before=before,
+        helper_after=after,
+    )
+    if process.returncode != 0:
+        raise RuntimeError(
+            f"controlled scontrol exited with status {process.returncode}"
+        )
     records = [line for line in output.splitlines() if line.strip()]
     if len(records) != 1:
         raise RuntimeError(
@@ -468,7 +1428,7 @@ def _query_slurm_controller(job_id: str) -> dict[str, Any]:
             fields[key] = value
     if fields.get("JobId") != job_id:
         raise RuntimeError("scontrol result does not identify the current job")
-    return {
+    result = {
         key: fields.get(key)
         for key in (
             "JobId",
@@ -483,6 +1443,8 @@ def _query_slurm_controller(job_id: str) -> dict[str, Any]:
             "Command",
         )
     }
+    result["loader_evidence"] = loader_evidence
+    return result
 
 
 def _observe_current_release_runtime() -> dict[str, Any]:
@@ -496,18 +1458,22 @@ def _observe_current_release_runtime() -> dict[str, Any]:
     errors: list[str] = []
     environment = {name: os.getenv(name) for name in _RELEASE_ENVIRONMENT_NAMES}
     job_id = environment.get("SLURM_JOB_ID")
+    helper_identity = observe_scontrol_helper_identity()
+    slurm_controller_loader: Optional[dict[str, Any]] = None
     try:
         if not isinstance(job_id, str) or not job_id.isdigit():
             raise ValueError("SLURM_JOB_ID is missing or invalid")
-        slurm_controller = _query_slurm_controller(job_id)
+        slurm_controller = _query_slurm_controller(
+            job_id, helper_identity=helper_identity
+        )
+        slurm_controller_loader = slurm_controller.pop("loader_evidence", None)
     except Exception as exc:
         slurm_controller = None
         errors.append(f"current Slurm allocation could not be observed: {exc}")
-    try:
-        affinity = _format_cpu_list(os.sched_getaffinity(0))
-    except Exception as exc:
-        affinity = None
-        errors.append(f"current CPU affinity could not be observed: {exc}")
+    thread_affinity = observe_process_thread_affinity()
+    affinity = thread_affinity.get("union_affinity")
+    if thread_affinity.get("stable") is not True:
+        errors.extend(str(item) for item in thread_affinity.get("errors", []))
     try:
         mems_allowed = _proc_status_value("Mems_allowed_list")
     except Exception as exc:
@@ -555,18 +1521,26 @@ def _observe_current_release_runtime() -> dict[str, Any]:
         "pid": os.getpid(),
         "host": socket.gethostname(),
         "affinity": affinity,
+        "thread_affinity": thread_affinity,
         "mems_allowed_list": mems_allowed,
         "gpu_node_cpulist": gpu_node_cpulist,
         "kernel_memory_policy": memory_policy,
         "environment": environment,
         "slurm_controller": slurm_controller,
+        "slurm_controller_helper": helper_identity,
+        "slurm_controller_loader": slurm_controller_loader,
         "cuda": cuda,
         "errors": errors,
     }
 
 
 def _release_runtime_contract(
-    *, payload_sha256: str, slurm: Mapping[str, Any], fingerprint: Mapping[str, Any]
+    *,
+    payload_sha256: str,
+    slurm: Mapping[str, Any],
+    fingerprint: Mapping[str, Any],
+    slurm_controller_helper: Mapping[str, Any],
+    slurm_controller_loader: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Build the future release-job contract committed by snapshot B."""
 
@@ -589,6 +1563,8 @@ def _release_runtime_contract(
         "qualification_topology_fingerprint_sha256": canonical_json_sha256(
             fingerprint
         ),
+        "slurm_controller_helper": deepcopy(dict(slurm_controller_helper)),
+        "slurm_controller_loader": deepcopy(dict(slurm_controller_loader)),
     }
 
 
@@ -628,14 +1604,36 @@ def expected_runtime_release_pin(
     libgint = runtime.get("libgint")
     slurm = qualification.get("slurm")
     topology_fingerprint = qualification.get("topology_fingerprint")
+    slurm_controller_helper = qualification.get("slurm_controller_helper")
+    slurm_controller_loader = qualification.get("slurm_controller_loader")
     if not all(
         isinstance(value, Mapping)
-        for value in (manifest, libgint, slurm, topology_fingerprint)
+        for value in (
+            manifest, libgint, slurm, topology_fingerprint,
+            slurm_controller_helper, slurm_controller_loader,
+        )
     ):
         raise ValueError("runtime gate payload has incomplete release-pin bindings")
     tree_sha256 = source.get("tree_sha256")
     if not _is_sha256(tree_sha256):
         raise ValueError("qualification source digest is invalid")
+    _validate_scontrol_helper_portable_binding(slurm_controller_helper)
+    _validate_scontrol_loader_portable_binding(slurm_controller_loader)
+    if (
+        slurm_controller_loader.get("library")
+        != slurm_controller_helper.get("library")
+        or slurm_controller_loader.get("elf_loader_policy")
+        != slurm_controller_helper.get("elf_loader_policy")
+    ):
+        raise ValueError("qualification scontrol loader does not match helper")
+    qualification_root = Path(str(source.get("root", "")))
+    if (
+        not qualification_root.is_absolute()
+        or qualification_root.name != "source"
+        or slurm_controller_helper.get("task_root")
+        != str(qualification_root.parent.parent.parent)
+    ):
+        raise ValueError("controlled scontrol helper task root is invalid")
 
     return {
         "schema": RELEASE_PIN_SCHEMA,
@@ -669,6 +1667,8 @@ def expected_runtime_release_pin(
             payload_sha256=payload_sha256,
             slurm=slurm,
             fingerprint=topology_fingerprint,
+            slurm_controller_helper=slurm_controller_helper,
+            slurm_controller_loader=slurm_controller_loader,
         ),
         "runtime": {
             "libgint_sha256": libgint.get("sha256"),
@@ -1217,9 +2217,21 @@ def _publication_attestation_checks(
         errors.append("qualification publication attestation prepublication hash mismatch")
     identity = attestation.get("published_directory_identity")
     root_stat = source_root.parent.lstat()
-    if not isinstance(identity, Mapping) or set(identity) != {"device", "inode"} or (
-        identity.get("device"), identity.get("inode")
-    ) != (root_stat.st_dev, root_stat.st_ino):
+    if (
+        not isinstance(identity, Mapping)
+        or set(identity) != {"device", "inode"}
+        or type(identity.get("device")) is not int
+        or identity["device"] < 0
+        or type(identity.get("inode")) is not int
+        or identity["inode"] <= 0
+    ):
+        errors.append(
+            "qualification publication attestation directory identity is invalid"
+        )
+    # st_dev is local to the observing client's mount namespace.  Preserve it
+    # in the signed attestation as a diagnostic, but use the portable inode for
+    # the shared NFS directory identity check.
+    elif identity["inode"] != root_stat.st_ino:
         errors.append("qualification publication attestation directory identity mismatch")
     unsigned = dict(attestation)
     unsigned.pop("attestation_sha256", None)
@@ -1254,6 +2266,8 @@ def _current_release_binding_errors(
         errors.append("current release runtime observation errors are invalid")
     elif observed_errors:
         errors.extend(str(error) for error in observed_errors)
+    thread_affinity = observation.get("thread_affinity")
+    errors.extend(_thread_affinity_errors(thread_affinity, label="release"))
 
     if not isinstance(release_topology, Mapping):
         errors.append("current release topology root must be an object")
@@ -1267,6 +2281,17 @@ def _current_release_binding_errors(
     if not isinstance(release_runtime_contract, Mapping):
         errors.append("release pin runtime contract is unavailable")
         release_runtime_contract = {}
+    errors.extend(_current_scontrol_helper_errors(
+        observation.get("slurm_controller_helper"),
+        expected=release_runtime_contract.get("slurm_controller_helper"),
+        label="release",
+    ))
+    errors.extend(_current_scontrol_loader_errors(
+        observation.get("slurm_controller_loader"),
+        expected=release_runtime_contract.get("slurm_controller_loader"),
+        helper_observation=observation.get("slurm_controller_helper"),
+        label="release",
+    ))
 
     environment = observation.get("environment")
     if not isinstance(environment, Mapping):
@@ -1353,11 +2378,13 @@ def _current_release_binding_errors(
         "CCSD_TOPOLOGY_SHA256": release_topology_sha256,
         "CCSD_BOUND_CPUS": _EXPECTED_RELEASE_AFFINITY,
         "GPU4PYSCF_NUMA": str(_EXPECTED_RELEASE_NUMA_NODE),
+        "CCSD_SCONTROL_PATH": (
+            (release_runtime_contract.get("slurm_controller_helper") or {}).get(
+                "configured_path"
+            )
+        ),
     }
-    if release_runtime_contract.get("node") != _EXPECTED_RELEASE_NODE:
-        errors.append("qualification node differs from fixed MTU node compute-1-6")
-    if release_runtime_contract.get("host") != _EXPECTED_RELEASE_NODE:
-        errors.append("qualification host differs from fixed MTU node compute-1-6")
+    errors.extend(_release_node_contract_errors(release_runtime_contract))
     for name, expected in expected_environment.items():
         if environment.get(name) != expected:
             errors.append(f"current release environment {name} mismatch")
@@ -1389,6 +2416,11 @@ def _current_release_binding_errors(
 
     if observation.get("affinity") != _EXPECTED_RELEASE_AFFINITY:
         errors.append("current release CPU affinity is not 24-31")
+    if observation.get("affinity") != (
+        thread_affinity.get("union_affinity")
+        if isinstance(thread_affinity, Mapping) else None
+    ):
+        errors.append("current release aggregate affinity is inconsistent")
     if release_topology.get("selected_cpulist") != observation.get("affinity"):
         errors.append("current release CPU affinity differs from topology")
     if release_topology.get("observed_cpulist_after_bind") != observation.get(
@@ -1565,7 +2597,7 @@ def _current_consumer_binding_errors(
     release_runtime_contract: Any,
     loaded_job_id: Optional[str],
 ) -> list[str]:
-    """Validate a benchmark/CP consumer from current process observations.
+    """Validate a benchmark, CP, or THC-audit consumer from live evidence.
 
     Qualification evidence establishes the immutable B source, binary, ABI,
     transfer ledger, node, GPU, and NUMA contract.  Each consumer must still
@@ -1576,7 +2608,9 @@ def _current_consumer_binding_errors(
 
     errors: list[str] = []
     if execution_mode not in {
-        "consumer-benchmark", "consumer-counterpoise"
+        "consumer-benchmark",
+        "consumer-counterpoise",
+        "consumer-thc-complete-audit",
     }:
         return ["consumer runtime gate execution mode is invalid"]
     if not isinstance(observation, Mapping):
@@ -1588,6 +2622,8 @@ def _current_consumer_binding_errors(
         errors.append("current consumer runtime observation errors are invalid")
     elif observed_errors:
         errors.extend(str(error) for error in observed_errors)
+    thread_affinity = observation.get("thread_affinity")
+    errors.extend(_thread_affinity_errors(thread_affinity, label="consumer"))
 
     if not isinstance(consumer_topology, Mapping):
         errors.append("current consumer topology root must be an object")
@@ -1601,6 +2637,17 @@ def _current_consumer_binding_errors(
     if not isinstance(release_runtime_contract, Mapping):
         errors.append("release pin runtime contract is unavailable")
         release_runtime_contract = {}
+    errors.extend(_current_scontrol_helper_errors(
+        observation.get("slurm_controller_helper"),
+        expected=release_runtime_contract.get("slurm_controller_helper"),
+        label="consumer",
+    ))
+    errors.extend(_current_scontrol_loader_errors(
+        observation.get("slurm_controller_loader"),
+        expected=release_runtime_contract.get("slurm_controller_loader"),
+        helper_observation=observation.get("slurm_controller_helper"),
+        label="consumer",
+    ))
 
     environment = observation.get("environment")
     if not isinstance(environment, Mapping):
@@ -1665,7 +2712,7 @@ def _current_consumer_binding_errors(
                 errors.append(
                     "current benchmark topology is not the fixed task/results job path"
                 )
-        else:
+        elif execution_mode == "consumer-counterpoise":
             if (
                 consumer_topology_file is None
                 or consumer_topology_file.name
@@ -1680,6 +2727,18 @@ def _current_consumer_binding_errors(
                 )
             else:
                 expected_topology_file = consumer_topology_file
+        else:
+            expected_topology_file = (
+                release_task_root
+                / "results"
+                / "thc-complete-water2-audit"
+                / f"topology-physical8-{job_id}.json"
+            )
+            if consumer_topology_file != expected_topology_file:
+                errors.append(
+                    "current THC complete audit topology is not the fixed "
+                    "task/results job path"
+                )
 
     expected_environment = {
         "SLURM_JOB_NODELIST": release_runtime_contract.get("node"),
@@ -1693,11 +2752,13 @@ def _current_consumer_binding_errors(
         "CCSD_TOPOLOGY_SHA256": consumer_topology_sha256,
         "CCSD_BOUND_CPUS": _EXPECTED_RELEASE_AFFINITY,
         "GPU4PYSCF_NUMA": str(_EXPECTED_RELEASE_NUMA_NODE),
+        "CCSD_SCONTROL_PATH": (
+            (release_runtime_contract.get("slurm_controller_helper") or {}).get(
+                "configured_path"
+            )
+        ),
     }
-    if release_runtime_contract.get("node") != _EXPECTED_RELEASE_NODE:
-        errors.append("qualification node differs from fixed MTU node compute-1-6")
-    if release_runtime_contract.get("host") != _EXPECTED_RELEASE_NODE:
-        errors.append("qualification host differs from fixed MTU node compute-1-6")
+    errors.extend(_release_node_contract_errors(release_runtime_contract))
     for name, expected in expected_environment.items():
         if environment.get(name) != expected:
             errors.append(f"current consumer environment {name} mismatch")
@@ -1726,6 +2787,11 @@ def _current_consumer_binding_errors(
     affinity = observation.get("affinity")
     if affinity != _EXPECTED_RELEASE_AFFINITY:
         errors.append("current consumer CPU affinity is not 24-31")
+    if affinity != (
+        thread_affinity.get("union_affinity")
+        if isinstance(thread_affinity, Mapping) else None
+    ):
+        errors.append("current consumer aggregate affinity is inconsistent")
     if consumer_topology.get("selected_cpulist") != affinity:
         errors.append("current consumer CPU affinity differs from topology")
     if consumer_topology.get("observed_cpulist_after_bind") != affinity:
@@ -1826,15 +2892,20 @@ def _current_consumer_binding_errors(
     ):
         errors.append("current consumer memory policy differs from release pin")
 
-    script_name = (
-        "benchmark.py"
-        if execution_mode == "consumer-benchmark" else "counterpoise.py"
-    )
-    launcher_name = (
-        "run_mtu_benchmark.sbatch"
-        if execution_mode == "consumer-benchmark"
-        else "run_mtu_counterpoise.sbatch"
-    )
+    script_name, launcher_name = {
+        "consumer-benchmark": (
+            "benchmark.py",
+            "run_mtu_benchmark.sbatch",
+        ),
+        "consumer-counterpoise": (
+            "counterpoise.py",
+            "run_mtu_counterpoise.sbatch",
+        ),
+        "consumer-thc-complete-audit": (
+            "thc_complete_water2_audit.py",
+            "run_mtu_thc_complete_water2_audit.sbatch",
+        ),
+    }[execution_mode]
     expected_script = (
         release_source_root / "benchmarks" / "cc" / "a100_water8" / script_name
         if release_source_root is not None else None
@@ -1889,10 +2960,11 @@ def validate_runtime_performance_gate(
     if execution_mode not in RUNTIME_GATE_EXECUTION_MODES:
         raise ValueError(
             "runtime gate execution_mode must be release-gate, "
-            "consumer-benchmark, or consumer-counterpoise"
+            "consumer-benchmark, consumer-counterpoise, or "
+            "consumer-thc-complete-audit"
         )
     binding_contract = {
-        "schema": "gpu4pyscf.gint-selected-runtime-gate-binding.v1",
+        "schema": "gpu4pyscf.gint-selected-runtime-gate-binding.v2",
         "caller_supplied_runtime_context_authoritative": False,
         "runtime_observation": "current-process-linux-cuda",
         "execution_mode": execution_mode,
@@ -1909,6 +2981,22 @@ def validate_runtime_performance_gate(
             (
                 "current release Slurm, Linux affinity/NUMA policy, and CUDA "
                 "device observed independently of topology JSON"
+            ),
+            (
+                "controlled scontrol executable and libslurmfull path, hash, "
+                "size, owner, exact mode, and portable inode"
+            ),
+            (
+                "sealed control-tools/distribution/bin/lib directory identities "
+                "within the trusted task-root-owner boundary"
+            ),
+            (
+                "glibc loader proof that the query actually mapped the pinned "
+                "$ORIGIN/../lib libslurmfull object"
+            ),
+            (
+                "stable /proc/self/task affinity snapshot with every thread "
+                "inside and the union covering CPUs 24-31"
             ),
             "mode-specific task/results topology bound to current Slurm job id",
         ],
@@ -2476,6 +3564,8 @@ def validate_runtime_performance_gate(
                 )
 
         if isinstance(result_data, Mapping):
+            if result_data.get("schema") != GINT_GATE_RESULT_SCHEMA:
+                errors.append("qualification result schema mismatch")
             result_source = result_data.get("source") or {}
             result_snapshot = result_source.get("snapshot") or {}
             result_provider = result_data.get("provider") or {}
@@ -2896,13 +3986,23 @@ __all__ = [
     "RELEASE_PIN_SCHEMA",
     "RELEASE_RUNTIME_CONTRACT_SCHEMA",
     "RELEASE_RUNTIME_OBSERVATION_SCHEMA",
+    "SCONTROL_HELPER_SCHEMA",
+    "SCONTROL_HELPER_TRUST_BOUNDARY",
+    "SCONTROL_LOADER_EVIDENCE_SCHEMA",
+    "THREAD_AFFINITY_OBSERVATION_SCHEMA",
     "RUNTIME_GATE_EXECUTION_MODES",
     "SOURCE_NORMALIZATION_POLICY",
     "SOURCE_NORMALIZATION_SCHEMA",
     "SOURCE_SNAPSHOT_SCHEMA",
     "canonical_json_sha256",
     "expected_runtime_release_pin",
+    "observe_process_thread_affinity",
+    "observe_scontrol_helper_identity",
     "release_source_tree_digest",
+    "scontrol_helper_portable_binding",
+    "scontrol_loader_portable_binding",
     "source_snapshot_normalization_errors",
+    "validate_scontrol_helper_portable_binding",
+    "validate_scontrol_loader_portable_binding",
     "validate_runtime_performance_gate",
 ]

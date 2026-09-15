@@ -2,6 +2,7 @@
 
 import numpy as np
 import pytest
+import gpu4pyscf.cc.thc_residual as thc_residual_module
 
 from gpu4pyscf.cc.thc_residual import (
     pair_factor_residual_algorithms_1_3,
@@ -156,6 +157,57 @@ def test_general_pair_factor_reduces_to_each_thc_algorithm():
     np.testing.assert_allclose(generic.algorithm_3, thc.algorithm_3, atol=2e-9)
     np.testing.assert_allclose(generic.sigma_pair, thc.sigma_thc, atol=3e-9)
     assert generic.metadata()["materialized_dense_t2"] is False
+    assert generic.algorithm_1_provenance is None
+    assert generic.algorithm_3_provenance is None
+    assert generic.coarse_ledger is None
+    assert thc.algorithm_1_provenance is None
+    assert thc.algorithm_3_provenance is None
+    assert thc.coarse_ledger is None
+    assert generic.metadata()["provenance_decomposition"] is False
+    assert generic.metadata()["provenance_available"] is False
+    assert generic.metadata()["coarse_r123_audit_ledger"] is False
+    assert thc.metadata()["provenance_decomposition"] is False
+    assert thc.metadata()["algorithm_1_provenance"] == []
+    assert thc.metadata()["coarse_ledger_buckets"] == []
+
+
+def test_provenance_audit_is_opt_in(monkeypatch):
+    t1, _factors, loo, lov, lvv, y_occ, y_vir, core = _problem(214)
+    pair_factor = np.einsum("iX,aX->iaX", y_occ, y_vir).reshape(
+        t1.size, core.shape[0]
+    )
+
+    def forbidden_audit(*_args, **_kwargs):
+        raise AssertionError("provenance audit was evaluated by default")
+
+    monkeypatch.setattr(
+        thc_residual_module,
+        "_pair_factor_provenance_algorithms_1_3_block",
+        forbidden_audit,
+    )
+    pair_result = pair_factor_residual_algorithms_1_3(
+        pair_factor,
+        core,
+        t1,
+        loo,
+        lov,
+        lvv,
+        nocc=t1.shape[0],
+        nvir=t1.shape[1],
+        auxiliary_block_size=2,
+    )
+    thc_result = thc_residual_algorithms_1_3(
+        y_occ,
+        y_vir,
+        core,
+        t1,
+        loo,
+        lov,
+        lvv,
+        auxiliary_block_size=2,
+    )
+    assert pair_result.algorithm_1_provenance is None
+    assert thc_result.algorithm_1_provenance is None
 
 
 def test_arbitrary_rr_pair_factor_matches_dense_equations_term_by_term():
@@ -216,10 +268,193 @@ def test_arbitrary_rr_pair_factor_matches_dense_equations_term_by_term():
         nocc=nocc,
         nvir=nvir,
         auxiliary_block_size=2,
+        record_provenance=True,
     )
     np.testing.assert_allclose(observed.algorithm_1, expected[0], atol=2e-9)
     np.testing.assert_allclose(observed.algorithm_2, expected[1], atol=2e-9)
     np.testing.assert_allclose(observed.algorithm_3, expected[2], atol=2e-9)
+
+    # Algorithm 1 is expanded by the two source pieces of the combined
+    # Hoo-Hvv factor.  The ordered cross terms are retained separately.
+    p1 = observed.algorithm_1_provenance
+    p3 = observed.algorithm_3_provenance
+    ledger = observed.coarse_ledger
+    assert set(p1) == {"LL", "LT1", "T1L", "T1T1"}
+    assert set(p3) == {
+        "Loo_Lvv", "Loo_T1vv", "T1oo_Lvv", "T1oo_T1vv"
+    }
+    assert set(ledger) == {
+        "algorithm_1_occupied_quadratic",
+        "algorithm_1_virtual_quadratic",
+        "algorithm_1_cross_plus_2_plus_3",
+    }
+    for value in tuple(p1.values()) + tuple(p3.values()):
+        assert value.shape == observed.algorithm_1.shape
+        assert value.dtype == observed.algorithm_1.dtype
+    np.testing.assert_allclose(sum(p1.values()), observed.algorithm_1)
+    np.testing.assert_allclose(sum(p3.values()), observed.algorithm_3)
+    np.testing.assert_allclose(sum(p1.values()), expected[0], atol=2e-9)
+    np.testing.assert_allclose(sum(p3.values()), expected[2], atol=2e-9)
+    occupied = np.einsum("iaX,Aki,kaY->AXY", u, transformed.hoo, u)
+    virtual = np.einsum("iaX,Aac,icY->AXY", u, transformed.hvv, u)
+    expected_ledger = {
+        "algorithm_1_occupied_quadratic": np.einsum(
+            "AXY,YZ,AWZ->XW", occupied, core, occupied
+        ),
+        "algorithm_1_virtual_quadratic": np.einsum(
+            "AXY,YZ,AWZ->XW", virtual, core, virtual
+        ),
+        "algorithm_1_cross_plus_2_plus_3": -(
+            np.einsum("AXY,YZ,AWZ->XW", occupied, core, virtual)
+            + np.einsum("AXY,YZ,AWZ->XW", virtual, core, occupied)
+        ) + expected[1] + expected[2],
+    }
+    for name in ledger:
+        np.testing.assert_allclose(ledger[name], expected_ledger[name], atol=2e-9)
+    np.testing.assert_allclose(
+        sum(ledger.values()), expected[0] + expected[1] + expected[2],
+        atol=3e-9,
+    )
+    assert np.max(np.abs(p1["LT1"])) > 1e-8
+    assert np.max(np.abs(p1["T1L"])) > 1e-8
+    assert np.max(np.abs(p3["Loo_T1vv"])) > 1e-8
+    assert np.max(np.abs(p3["T1oo_Lvv"])) > 1e-8
+
+    block_one = pair_factor_residual_algorithms_1_3(
+        pair_factor,
+        core,
+        t1,
+        loo,
+        lov,
+        lvv,
+        nocc=nocc,
+        nvir=nvir,
+        auxiliary_block_size=1,
+        record_provenance=True,
+    )
+    for name in ledger:
+        np.testing.assert_allclose(
+            block_one.coarse_ledger[name], ledger[name], atol=3e-9
+        )
+
+
+def test_thc_provenance_preserves_separable_endpoint_and_records_metadata():
+    t1, _factors, loo, lov, lvv, y_occ, y_vir, core = _problem(212)
+    observed = thc_residual_algorithms_1_3(
+        y_occ,
+        y_vir,
+        core,
+        t1,
+        loo,
+        lov,
+        lvv,
+        auxiliary_block_size=2,
+        record_provenance=True,
+    )
+    np.testing.assert_allclose(
+        sum(observed.algorithm_1_provenance.values()), observed.algorithm_1,
+        atol=3e-9,
+    )
+    np.testing.assert_allclose(
+        sum(observed.algorithm_3_provenance.values()), observed.algorithm_3,
+        atol=3e-9,
+    )
+    metadata = observed.metadata()
+    assert metadata["provenance_decomposition"] is True
+    assert metadata["provenance_available"] is True
+    assert metadata["provenance_largest_intermediate_nbytes"] > 0
+    assert metadata["algorithm_1_provenance"] == [
+        "LL", "LT1", "T1L", "T1T1"
+    ]
+    assert metadata["algorithm_3_provenance"] == [
+        "Loo_Lvv", "Loo_T1vv", "T1oo_Lvv", "T1oo_T1vv"
+    ]
+    assert metadata["coarse_r123_audit_ledger"] is True
+    assert metadata["coarse_r123_ledger_kind"] == "audit-only"
+    assert metadata["coarse_r123_diagram_partition_fused"] is False
+    assert metadata["coarse_ledger_performance_eligible"] is False
+    assert "performance_eligible" not in metadata
+    assert metadata["coarse_ledger_largest_intermediate_scope"] == (
+        "largest-single-logical-array"
+    )
+    assert metadata["coarse_ledger_retained_nbytes"] > 0
+    assert metadata["coarse_ledger_peak_memory_requires_profiling"] is True
+    assert metadata["coarse_ledger_buckets"] == [
+        "algorithm_1_occupied_quadratic",
+        "algorithm_1_virtual_quadratic",
+        "algorithm_1_cross_plus_2_plus_3",
+    ]
+    np.testing.assert_allclose(
+        sum(observed.coarse_ledger.values()),
+        observed.algorithm_1 + observed.algorithm_2 + observed.algorithm_3,
+        atol=3e-9,
+    )
+
+    zero_t1 = np.zeros_like(t1)
+    zero_t1_result = thc_residual_algorithms_1_3(
+        y_occ,
+        y_vir,
+        core,
+        zero_t1,
+        loo,
+        lov,
+        lvv,
+        auxiliary_block_size=2,
+        record_provenance=True,
+    )
+    for name in ("LT1", "T1L", "T1T1"):
+        np.testing.assert_allclose(
+            zero_t1_result.algorithm_1_provenance[name], 0.0, atol=1e-13
+        )
+    for name in ("Loo_T1vv", "T1oo_Lvv", "T1oo_T1vv"):
+        np.testing.assert_allclose(
+            zero_t1_result.algorithm_3_provenance[name], 0.0, atol=1e-13
+        )
+    np.testing.assert_allclose(
+        sum(zero_t1_result.coarse_ledger.values()),
+        zero_t1_result.algorithm_1
+        + zero_t1_result.algorithm_2
+        + zero_t1_result.algorithm_3,
+        atol=3e-9,
+    )
+
+
+def test_coarse_third_bucket_keeps_bare_ovov_driver_separate_from_ring():
+    t1, _factors, loo, lov, lvv, y_occ, y_vir, _core = _problem(215)
+    zero_t1 = np.zeros_like(t1)
+    zero_core = np.zeros((y_occ.shape[1], y_occ.shape[1]))
+    result = thc_residual_algorithms_1_3(
+        y_occ,
+        y_vir,
+        zero_core,
+        zero_t1,
+        loo,
+        lov,
+        lvv,
+        auxiliary_block_size=2,
+        record_provenance=True,
+    )
+    # At t1=0 and C=0, A1 and A3 vanish while Algorithm 2 retains the
+    # core-independent bare ovov driver abar.T@abar.  Thus the neutral third
+    # bucket is nonzero and must not be called a projected CC ring term.
+    np.testing.assert_allclose(result.algorithm_1, 0.0, atol=1e-13)
+    np.testing.assert_allclose(result.algorithm_3, 0.0, atol=1e-13)
+    assert np.max(np.abs(result.algorithm_2)) > 1e-8
+    np.testing.assert_allclose(
+        result.coarse_ledger["algorithm_1_occupied_quadratic"],
+        0.0,
+        atol=1e-13,
+    )
+    np.testing.assert_allclose(
+        result.coarse_ledger["algorithm_1_virtual_quadratic"],
+        0.0,
+        atol=1e-13,
+    )
+    np.testing.assert_allclose(
+        result.coarse_ledger["algorithm_1_cross_plus_2_plus_3"],
+        result.algorithm_2,
+        atol=2e-12,
+    )
 
 
 def test_streamed_algorithms_and_rr_back_projection():
@@ -249,6 +484,10 @@ def test_streamed_algorithms_and_rr_back_projection():
         project_thc_residual_to_rr(expected, tau), expected_rr
     )
     assert result.metadata()["complete_ccsd_residual"] is False
+    assert result.algorithm_1_provenance is None
+    assert result.algorithm_3_provenance is None
+    assert result.metadata()["provenance_decomposition"] is False
+    assert result.metadata()["provenance_largest_intermediate_nbytes"] == 0
 
 
 def test_gpu_thc_algorithms_stay_on_device():
@@ -261,7 +500,15 @@ def test_gpu_thc_algorithms_stay_on_device():
     values = _problem(205)
     t1, _factors, loo, lov, lvv, y_occ, y_vir, core = values
     cpu = thc_residual_algorithms_1_3(
-        y_occ, y_vir, core, t1, loo, lov, lvv, auxiliary_block_size=2
+        y_occ,
+        y_vir,
+        core,
+        t1,
+        loo,
+        lov,
+        lvv,
+        auxiliary_block_size=2,
+        record_provenance=True,
     )
     gpu = thc_residual_algorithms_1_3(
         cp.asarray(y_occ),
@@ -272,11 +519,36 @@ def test_gpu_thc_algorithms_stay_on_device():
         cp.asarray(lov),
         cp.asarray(lvv),
         auxiliary_block_size=2,
+        record_provenance=True,
     )
     assert isinstance(gpu.sigma_thc, cp.ndarray)
     cp.testing.assert_allclose(
         gpu.sigma_thc, cp.asarray(cpu.sigma_thc), atol=3e-9, rtol=3e-11
     )
+    for name in cpu.algorithm_1_provenance:
+        assert isinstance(gpu.algorithm_1_provenance[name], cp.ndarray)
+        cp.testing.assert_allclose(
+            gpu.algorithm_1_provenance[name],
+            cp.asarray(cpu.algorithm_1_provenance[name]),
+            atol=3e-9,
+            rtol=3e-11,
+        )
+    for name in cpu.algorithm_3_provenance:
+        assert isinstance(gpu.algorithm_3_provenance[name], cp.ndarray)
+        cp.testing.assert_allclose(
+            gpu.algorithm_3_provenance[name],
+            cp.asarray(cpu.algorithm_3_provenance[name]),
+            atol=3e-9,
+            rtol=3e-11,
+        )
+    for name in cpu.coarse_ledger:
+        assert isinstance(gpu.coarse_ledger[name], cp.ndarray)
+        cp.testing.assert_allclose(
+            gpu.coarse_ledger[name],
+            cp.asarray(cpu.coarse_ledger[name]),
+            atol=3e-9,
+            rtol=3e-11,
+        )
 
 
 def test_gpu_general_pair_reference_stays_on_device():
@@ -303,6 +575,7 @@ def test_gpu_general_pair_reference_stays_on_device():
         nocc=nocc,
         nvir=nvir,
         auxiliary_block_size=2,
+        record_provenance=True,
     )
     gpu = pair_factor_residual_algorithms_1_3(
         cp.asarray(pair_factor),
@@ -314,8 +587,33 @@ def test_gpu_general_pair_reference_stays_on_device():
         nocc=nocc,
         nvir=nvir,
         auxiliary_block_size=2,
+        record_provenance=True,
     )
     assert isinstance(gpu.sigma_pair, cp.ndarray)
     cp.testing.assert_allclose(
         gpu.sigma_pair, cp.asarray(cpu.sigma_pair), atol=5e-8, rtol=3e-11
     )
+    for name in cpu.algorithm_1_provenance:
+        assert isinstance(gpu.algorithm_1_provenance[name], cp.ndarray)
+        cp.testing.assert_allclose(
+            gpu.algorithm_1_provenance[name],
+            cp.asarray(cpu.algorithm_1_provenance[name]),
+            atol=5e-8,
+            rtol=3e-11,
+        )
+    for name in cpu.algorithm_3_provenance:
+        assert isinstance(gpu.algorithm_3_provenance[name], cp.ndarray)
+        cp.testing.assert_allclose(
+            gpu.algorithm_3_provenance[name],
+            cp.asarray(cpu.algorithm_3_provenance[name]),
+            atol=5e-8,
+            rtol=3e-11,
+        )
+    for name in cpu.coarse_ledger:
+        assert isinstance(gpu.coarse_ledger[name], cp.ndarray)
+        cp.testing.assert_allclose(
+            gpu.coarse_ledger[name],
+            cp.asarray(cpu.coarse_ledger[name]),
+            atol=5e-8,
+            rtol=3e-11,
+        )

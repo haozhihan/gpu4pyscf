@@ -186,6 +186,8 @@ def test_adaptive_rank_reaches_and_records_exact_full_pair_endpoint():
     assert result.thc_rank == nocc * nvir
     assert result.rank_attempts[0] == rr_rank
     assert result.rank_attempts[-1] == nocc * nvir
+    assert result.analytic_full_pair_endpoint is True
+    assert result.exact_pair_roundoff_gate_passed is True
     np.testing.assert_allclose(result.reconstruct_projector(), vectors, atol=2e-14)
 
 

@@ -83,6 +83,12 @@ enum {
     GINT_SELECTED_KERNEL_LAUNCH_FAILED = 5
 };
 
+enum {
+    GINT_SELECTED_ROW_GROUP_DIAGONAL = 1,
+    GINT_SELECTED_GROUPED_COLUMNS = 2,
+    GINT_SELECTED_COLUMN_FLAG_MASK = 3
+};
+
 /*
  * Rys-7/8 instantiate GOUTSIZE7/8 as 21,720/45,750 doubles.  Keeping that
  * array automatic gives each thread a 177,472/369,600-byte static stack on
@@ -143,55 +149,28 @@ void selected_build_gout(const GINTEnvVars envs,
     }
 }
 
-template <int NROOTS, int GOUTSIZE> __device__ __forceinline__
-void selected_columns_task(GINTEnvVars envs,
-                           GINTSelectedPairData data,
-                           double *columns,
-                           int batch_size,
-                           const int *selected_pairs,
-                           const int *selected_rows,
-                           int selected_count,
-                           int cp_ij_id,
-                           int cp_kl_id,
-                           int row_group_diagonal,
-                           BasisProdOffsets offsets,
-                           double log_cutoff,
-                           size_t linear,
-                           double *gout)
+__device__ __forceinline__
+void selected_contract_column(const GINTEnvVars envs,
+                              const GINTSelectedPairData data,
+                              double *columns,
+                              int batch_size,
+                              int pair,
+                              int output_row,
+                              int cp_kl_id,
+                              int row_group_diagonal,
+                              int bas_ij,
+                              int bas_kl,
+                              const double *gout)
 {
-    int task_ij = (int)(linear % offsets.ntasks_ij);
-    int selected = (int)(linear / offsets.ntasks_ij);
-    int pair = selected_pairs[selected];
-    int output_row = selected_rows[selected];
     if (pair < 0 || pair >= data.npair ||
         output_row < 0 || output_row >= batch_size ||
         data.pair_cp_id[pair] != cp_kl_id) {
         return;
     }
-    int task_kl = data.pair_task_id[pair];
-    if (task_kl < 0 || task_kl >= offsets.ntasks_kl) {
-        return;
-    }
-
-    int bas_ij = offsets.bas_ij + task_ij;
-    int bas_kl = offsets.bas_kl + task_kl;
-    if (bas_ij < 0 || bas_ij >= data.task_count ||
-        bas_kl < 0 || bas_kl >= data.task_count) {
-        return;
-    }
-    if (data.task_log_q[bas_ij] + data.task_log_q[bas_kl] < log_cutoff) {
-        return;
-    }
-    int prim_ij = offsets.primitive_ij + task_ij * envs.nprim_ij;
-    int prim_kl = offsets.primitive_kl + task_kl * envs.nprim_kl;
     int ish = c_bpcache.bas_pair2bra[bas_ij];
     int jsh = c_bpcache.bas_pair2ket[bas_ij];
     int ksh = c_bpcache.bas_pair2bra[bas_kl];
     int lsh = c_bpcache.bas_pair2ket[bas_kl];
-
-    selected_build_gout<NROOTS, GOUTSIZE>(
-        envs, bas_ij, bas_kl, prim_ij, prim_kl, gout);
-
     int pivot_first = data.pair_i[pair];
     int pivot_second = data.pair_j[pair];
     int pivot_symmetrize = (int)data.pair_symmetrize[pair];
@@ -257,6 +236,126 @@ void selected_columns_task(GINTEnvVars envs,
     }
 }
 
+template <int NROOTS, int GOUTSIZE> __device__ __forceinline__
+void selected_columns_task(GINTEnvVars envs,
+                           GINTSelectedPairData data,
+                           double *columns,
+                           int batch_size,
+                           const int *selected_pairs,
+                           const int *selected_rows,
+                           int selected_count,
+                           int cp_ij_id,
+                           int cp_kl_id,
+                           int row_group_diagonal,
+                           BasisProdOffsets offsets,
+                           double log_cutoff,
+                           size_t linear,
+                           double *gout)
+{
+    int task_ij = (int)(linear % offsets.ntasks_ij);
+    int selected = (int)(linear / offsets.ntasks_ij);
+    int pair = selected_pairs[selected];
+    int output_row = selected_rows[selected];
+    if (pair < 0 || pair >= data.npair ||
+        output_row < 0 || output_row >= batch_size ||
+        data.pair_cp_id[pair] != cp_kl_id) {
+        return;
+    }
+    int task_kl = data.pair_task_id[pair];
+    if (task_kl < 0 || task_kl >= offsets.ntasks_kl) {
+        return;
+    }
+
+    int bas_ij = offsets.bas_ij + task_ij;
+    int bas_kl = offsets.bas_kl + task_kl;
+    if (bas_ij < 0 || bas_ij >= data.task_count ||
+        bas_kl < 0 || bas_kl >= data.task_count) {
+        return;
+    }
+    if (data.task_log_q[bas_ij] + data.task_log_q[bas_kl] < log_cutoff) {
+        return;
+    }
+    int prim_ij = offsets.primitive_ij + task_ij * envs.nprim_ij;
+    int prim_kl = offsets.primitive_kl + task_kl * envs.nprim_kl;
+    selected_build_gout<NROOTS, GOUTSIZE>(
+        envs, bas_ij, bas_kl, prim_ij, prim_kl, gout);
+    selected_contract_column(
+        envs, data, columns, batch_size, pair, output_row, cp_kl_id,
+        row_group_diagonal, bas_ij, bas_kl, gout);
+}
+
+template <int NROOTS, int GOUTSIZE> __device__ __forceinline__
+void selected_columns_grouped_task(GINTEnvVars envs,
+                                   GINTSelectedPairData data,
+                                   double *columns,
+                                   int batch_size,
+                                   const int *selected_pairs,
+                                   const int *selected_rows,
+                                   int selected_count,
+                                   int cp_ij_id,
+                                   int cp_kl_id,
+                                   int row_group_diagonal,
+                                   BasisProdOffsets offsets,
+                                   double log_cutoff,
+                                   size_t linear,
+                                   double *gout)
+{
+    int task_ij = (int)(linear % offsets.ntasks_ij);
+    int selected = (int)(linear / offsets.ntasks_ij);
+    int pair = selected_pairs[selected];
+    if (pair < 0 || pair >= data.npair ||
+        data.pair_cp_id[pair] != cp_kl_id) {
+        return;
+    }
+    int task_kl = data.pair_task_id[pair];
+    if (task_kl < 0 || task_kl >= offsets.ntasks_kl) {
+        return;
+    }
+
+    /*
+     * The Python provider stable-sorts each cp-local request by ket task.
+     * Only the first pivot in a contiguous task group evaluates GOUT; this
+     * thread then contracts all pivots in the group into their original rows.
+     * The validity checks keep an unsorted or malformed private-ABI caller
+     * correct and bounded, though such a caller simply gets less reuse.
+     */
+    if (selected > 0) {
+        int previous_pair = selected_pairs[selected - 1];
+        if (previous_pair >= 0 && previous_pair < data.npair &&
+            data.pair_cp_id[previous_pair] == cp_kl_id &&
+            data.pair_task_id[previous_pair] == task_kl) {
+            return;
+        }
+    }
+
+    int bas_ij = offsets.bas_ij + task_ij;
+    int bas_kl = offsets.bas_kl + task_kl;
+    if (bas_ij < 0 || bas_ij >= data.task_count ||
+        bas_kl < 0 || bas_kl >= data.task_count) {
+        return;
+    }
+    if (data.task_log_q[bas_ij] + data.task_log_q[bas_kl] < log_cutoff) {
+        return;
+    }
+    int prim_ij = offsets.primitive_ij + task_ij * envs.nprim_ij;
+    int prim_kl = offsets.primitive_kl + task_kl * envs.nprim_kl;
+    selected_build_gout<NROOTS, GOUTSIZE>(
+        envs, bas_ij, bas_kl, prim_ij, prim_kl, gout);
+
+    for (int member = selected; member < selected_count; ++member) {
+        int member_pair = selected_pairs[member];
+        if (member_pair < 0 || member_pair >= data.npair ||
+            data.pair_cp_id[member_pair] != cp_kl_id ||
+            data.pair_task_id[member_pair] != task_kl) {
+            break;
+        }
+        selected_contract_column(
+            envs, data, columns, batch_size, member_pair,
+            selected_rows[member], cp_kl_id, row_group_diagonal,
+            bas_ij, bas_kl, gout);
+    }
+}
+
 template <int NROOTS, int GOUTSIZE> __global__
 void selected_columns_kernel_cutoff(GINTEnvVars envs,
                                     GINTSelectedPairData data,
@@ -284,6 +383,33 @@ void selected_columns_kernel_cutoff(GINTEnvVars envs,
 }
 
 template <int NROOTS, int GOUTSIZE> __global__
+void selected_columns_kernel_grouped_cutoff(
+                                    GINTEnvVars envs,
+                                    GINTSelectedPairData data,
+                                    double *columns,
+                                    int batch_size,
+                                    const int *selected_pairs,
+                                    const int *selected_rows,
+                                    int selected_count,
+                                    int cp_ij_id,
+                                    int cp_kl_id,
+                                    int row_group_diagonal,
+                                    BasisProdOffsets offsets,
+                                    double log_cutoff)
+{
+    size_t linear = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+    size_t work = (size_t)offsets.ntasks_ij * selected_count;
+    if (linear >= work) {
+        return;
+    }
+    double gout[GOUTSIZE];
+    selected_columns_grouped_task<NROOTS, GOUTSIZE>(
+        envs, data, columns, batch_size, selected_pairs, selected_rows,
+        selected_count, cp_ij_id, cp_kl_id, row_group_diagonal, offsets,
+        log_cutoff, linear, gout);
+}
+
+template <int NROOTS, int GOUTSIZE> __global__
 void selected_columns_kernel_bounded_workspace(
                                     GINTEnvVars envs,
                                     GINTSelectedPairData data,
@@ -305,6 +431,34 @@ void selected_columns_kernel_bounded_workspace(
     double *gout = workspace + slot * GOUTSIZE;
     for (size_t linear = slot; linear < work; linear += stride) {
         selected_columns_task<NROOTS, GOUTSIZE>(
+            envs, data, columns, batch_size, selected_pairs, selected_rows,
+            selected_count, cp_ij_id, cp_kl_id, row_group_diagonal, offsets,
+            log_cutoff, linear, gout);
+    }
+}
+
+template <int NROOTS, int GOUTSIZE> __global__
+void selected_columns_kernel_grouped_bounded_workspace(
+                                    GINTEnvVars envs,
+                                    GINTSelectedPairData data,
+                                    double *columns,
+                                    int batch_size,
+                                    const int *selected_pairs,
+                                    const int *selected_rows,
+                                    int selected_count,
+                                    int cp_ij_id,
+                                    int cp_kl_id,
+                                    int row_group_diagonal,
+                                    BasisProdOffsets offsets,
+                                    double log_cutoff,
+                                    double *workspace)
+{
+    size_t slot = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = (size_t)gridDim.x * blockDim.x;
+    size_t work = (size_t)offsets.ntasks_ij * selected_count;
+    double *gout = workspace + slot * GOUTSIZE;
+    for (size_t linear = slot; linear < work; linear += stride) {
+        selected_columns_grouped_task<NROOTS, GOUTSIZE>(
             envs, data, columns, batch_size, selected_pairs, selected_rows,
             selected_count, cp_ij_id, cp_kl_id, row_group_diagonal, offsets,
             log_cutoff, linear, gout);
@@ -438,6 +592,7 @@ static int launch_selected_columns(cudaStream_t stream,
                                    int cp_ij_id,
                                    int cp_kl_id,
                                    int row_group_diagonal,
+                                   int grouped,
                                    BasisProdOffsets offsets,
                                    double log_cutoff)
 {
@@ -447,11 +602,19 @@ static int launch_selected_columns(cudaStream_t stream,
     if (blocks > 2147483647ULL) {
         return GINT_SELECTED_GRID_OVERFLOW;
     }
-    selected_columns_kernel_cutoff<NROOTS, GOUTSIZE>
-        <<<dim3((unsigned int)blocks), dim3(threads), 0, stream>>>(
-            envs, data, columns, batch_size, selected_pairs, selected_rows,
-            selected_count, cp_ij_id, cp_kl_id, row_group_diagonal,
-            offsets, log_cutoff);
+    if (grouped) {
+        selected_columns_kernel_grouped_cutoff<NROOTS, GOUTSIZE>
+            <<<dim3((unsigned int)blocks), dim3(threads), 0, stream>>>(
+                envs, data, columns, batch_size, selected_pairs, selected_rows,
+                selected_count, cp_ij_id, cp_kl_id, row_group_diagonal,
+                offsets, log_cutoff);
+    } else {
+        selected_columns_kernel_cutoff<NROOTS, GOUTSIZE>
+            <<<dim3((unsigned int)blocks), dim3(threads), 0, stream>>>(
+                envs, data, columns, batch_size, selected_pairs, selected_rows,
+                selected_count, cp_ij_id, cp_kl_id, row_group_diagonal,
+                offsets, log_cutoff);
+    }
     return cudaGetLastError() == cudaSuccess
          ? GINT_SELECTED_SUCCESS : GINT_SELECTED_KERNEL_LAUNCH_FAILED;
 }
@@ -494,6 +657,7 @@ static int launch_selected_columns_bounded_workspace(
                                    int cp_ij_id,
                                    int cp_kl_id,
                                    int row_group_diagonal,
+                                   int grouped,
                                    BasisProdOffsets offsets,
                                    double log_cutoff,
                                    void *workspace,
@@ -514,12 +678,23 @@ static int launch_selected_columns_bounded_workspace(
         return blocks < 1
              ? GINT_SELECTED_INVALID_ARGUMENT : GINT_SELECTED_GRID_OVERFLOW;
     }
-    selected_columns_kernel_bounded_workspace<NROOTS, GOUTSIZE>
-        <<<dim3((unsigned int)blocks),
-           dim3((unsigned int)threads), 0, stream>>>(
-            envs, data, columns, batch_size, selected_pairs, selected_rows,
-            selected_count, cp_ij_id, cp_kl_id, row_group_diagonal,
-            offsets, log_cutoff, static_cast<double *>(workspace));
+    if (grouped) {
+        selected_columns_kernel_grouped_bounded_workspace<NROOTS, GOUTSIZE>
+            <<<dim3((unsigned int)blocks),
+               dim3((unsigned int)threads), 0, stream>>>(
+                envs, data, columns, batch_size,
+                selected_pairs, selected_rows, selected_count,
+                cp_ij_id, cp_kl_id, row_group_diagonal, offsets, log_cutoff,
+                static_cast<double *>(workspace));
+    } else {
+        selected_columns_kernel_bounded_workspace<NROOTS, GOUTSIZE>
+            <<<dim3((unsigned int)blocks),
+               dim3((unsigned int)threads), 0, stream>>>(
+                envs, data, columns, batch_size,
+                selected_pairs, selected_rows, selected_count,
+                cp_ij_id, cp_kl_id, row_group_diagonal, offsets, log_cutoff,
+                static_cast<double *>(workspace));
+    }
     return cudaGetLastError() == cudaSuccess
          ? GINT_SELECTED_SUCCESS : GINT_SELECTED_KERNEL_LAUNCH_FAILED;
 }
@@ -643,8 +818,8 @@ int GINTfill_selected_int2e_columns(
         bpcache, data, cp_ij_id, cp_kl_id, log_cutoff, omega);
     if (error != GINT_SELECTED_SUCCESS || columns == NULL || batch_size < 1 ||
         selected_pairs == NULL || selected_rows == NULL || selected_count < 1 ||
-        selected_count > batch_size ||
-        (row_group_diagonal != 0 && row_group_diagonal != 1)) {
+        selected_count > batch_size || row_group_diagonal < 0 ||
+        (row_group_diagonal & ~GINT_SELECTED_COLUMN_FLAG_MASK) != 0) {
         return error == GINT_SELECTED_SUCCESS
              ? GINT_SELECTED_INVALID_ARGUMENT : error;
     }
@@ -652,6 +827,8 @@ int GINTfill_selected_int2e_columns(
         bpcache->cptype[cp_kl_id].npairs < 1) {
         return GINT_SELECTED_SUCCESS;
     }
+    int grouped = row_group_diagonal & GINT_SELECTED_GROUPED_COLUMNS;
+    row_group_diagonal &= GINT_SELECTED_ROW_GROUP_DIAGONAL;
     cudaStream_t stream = reinterpret_cast<cudaStream_t>(stream_pointer);
     cudaError_t copy_error = cudaMemcpyToSymbolAsync(
         c_bpcache, bpcache, sizeof(BasisProdCache), 0,
@@ -676,35 +853,35 @@ int GINTfill_selected_int2e_columns(
     switch (envs.nrys_roots) {
     case 1: return launch_selected_columns<1, GOUTSIZE1>(
         stream, envs, *data, columns, batch_size, selected_pairs, selected_rows,
-        selected_count, cp_ij_id, cp_kl_id, row_group_diagonal, offsets,
+        selected_count, cp_ij_id, cp_kl_id, row_group_diagonal, grouped, offsets,
         log_cutoff);
     case 2: return launch_selected_columns<2, GOUTSIZE2>(
         stream, envs, *data, columns, batch_size, selected_pairs, selected_rows,
-        selected_count, cp_ij_id, cp_kl_id, row_group_diagonal, offsets,
+        selected_count, cp_ij_id, cp_kl_id, row_group_diagonal, grouped, offsets,
         log_cutoff);
     case 3: return launch_selected_columns<3, GOUTSIZE3>(
         stream, envs, *data, columns, batch_size, selected_pairs, selected_rows,
-        selected_count, cp_ij_id, cp_kl_id, row_group_diagonal, offsets,
+        selected_count, cp_ij_id, cp_kl_id, row_group_diagonal, grouped, offsets,
         log_cutoff);
     case 4: return launch_selected_columns<4, GOUTSIZE4>(
         stream, envs, *data, columns, batch_size, selected_pairs, selected_rows,
-        selected_count, cp_ij_id, cp_kl_id, row_group_diagonal, offsets,
+        selected_count, cp_ij_id, cp_kl_id, row_group_diagonal, grouped, offsets,
         log_cutoff);
     case 5: return launch_selected_columns<5, GOUTSIZE5>(
         stream, envs, *data, columns, batch_size, selected_pairs, selected_rows,
-        selected_count, cp_ij_id, cp_kl_id, row_group_diagonal, offsets,
+        selected_count, cp_ij_id, cp_kl_id, row_group_diagonal, grouped, offsets,
         log_cutoff);
     case 6: return launch_selected_columns<6, GOUTSIZE6>(
         stream, envs, *data, columns, batch_size, selected_pairs, selected_rows,
-        selected_count, cp_ij_id, cp_kl_id, row_group_diagonal, offsets,
+        selected_count, cp_ij_id, cp_kl_id, row_group_diagonal, grouped, offsets,
         log_cutoff);
     case 7: return launch_selected_columns_bounded_workspace<7, GOUTSIZE7>(
         stream, envs, *data, columns, batch_size, selected_pairs, selected_rows,
-        selected_count, cp_ij_id, cp_kl_id, row_group_diagonal, offsets,
+        selected_count, cp_ij_id, cp_kl_id, row_group_diagonal, grouped, offsets,
         log_cutoff, workspace, workspace_bytes);
     case 8: return launch_selected_columns_bounded_workspace<8, GOUTSIZE8>(
         stream, envs, *data, columns, batch_size, selected_pairs, selected_rows,
-        selected_count, cp_ij_id, cp_kl_id, row_group_diagonal, offsets,
+        selected_count, cp_ij_id, cp_kl_id, row_group_diagonal, grouped, offsets,
         log_cutoff, workspace, workspace_bytes);
     default: return GINT_SELECTED_UNSUPPORTED_RYS_ORDER;
     }

@@ -1,0 +1,17 @@
+{
+  "notes": [
+    "The Python runner accepts water2-tz, water4-tz, and water8-tz.",
+    "The current first-gate Slurm launcher still refuses cases beyond WATER2; this manifest authorizes only a dry-run Python argv, not submission.",
+    "Dense four-virtual storage means WATER8 feasibility cannot be inferred from WATER2 or WATER4."
+  ],
+  "result_schema": "agent-qc.single-a100-byteqc-rccsd.v2",
+  "runner_sha256": "f8be3dd5a6f6931c57de837ef8f996a59900e0bb3e7b1c75d08c061d91647407",
+  "schema": "agent-qc.external-baseline-runner-capabilities.v1",
+  "software": "byteqc",
+  "supported_cases": [
+    "water2-tz",
+    "water4-tz",
+    "water8-tz"
+  ],
+  "water4_argv_supported": true
+}

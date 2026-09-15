@@ -441,6 +441,106 @@ def _array_module(array):
     return np
 
 
+def _require_current_resident_device(
+    xp: Any,
+    *named_arrays: tuple[str, Any],
+    operation: str,
+) -> Optional[int]:
+    """Require resident arrays to share the active CuPy device."""
+
+    for name, array in named_arrays:
+        if _array_module(array) is not xp:
+            raise TypeError(
+                f"{operation} tensor {name} does not use the resident backend"
+            )
+    if xp is np:
+        return None
+    device_ids = {
+        name: int(array.device.id) for name, array in named_arrays
+    }
+    unique_devices = set(device_ids.values())
+    if len(unique_devices) != 1:
+        details = ", ".join(
+            f"{name}={device_id}" for name, device_id in device_ids.items()
+        )
+        raise TypeError(
+            f"{operation} CuPy tensors must use one device; {details}"
+        )
+    device_id = next(iter(unique_devices))
+    current_device_id = int(xp.cuda.runtime.getDevice())
+    if current_device_id != device_id:
+        raise RuntimeError(
+            f"{operation} current CuPy device does not match resident "
+            f"tensors: current={current_device_id}, resident={device_id}"
+        )
+    return device_id
+
+
+def _prepare_mo_coefficients(
+    mo_coeff: Any,
+    xp: Any,
+    resident_reference: Any,
+    nao: int,
+    *,
+    transfer_counter: Any,
+    operation: str,
+) -> tuple[Any, str, int, Optional[int]]:
+    """Validate or explicitly account for one host-to-GPU coefficient copy."""
+
+    coefficient_xp = _array_module(mo_coeff)
+    if xp is np:
+        if coefficient_xp is not np:
+            raise TypeError(
+                f"{operation} cannot copy resident CuPy MO coefficients to host"
+            )
+        coefficient = np.asarray(mo_coeff)
+        source = "host-resident"
+        uploaded_nbytes = 0
+        device_id = None
+    elif coefficient_xp is xp:
+        coefficient = mo_coeff
+        device_id = _require_current_resident_device(
+            xp,
+            ("resident_factors", resident_reference),
+            ("mo_coeff", coefficient),
+            operation=operation,
+        )
+        source = "gpu-resident-same-device"
+        uploaded_nbytes = 0
+    else:
+        host_coefficient = np.asarray(mo_coeff)
+        if host_coefficient.ndim != 2 or host_coefficient.shape[0] != nao:
+            raise ValueError("mo_coeff must have shape (nao,nmo)")
+        record_h2d = getattr(transfer_counter, "record_h2d", None)
+        if transfer_counter is None or not callable(record_h2d):
+            raise ValueError(
+                "uploading MO coefficients requires an explicit "
+                "transfer_counter with record_h2d"
+            )
+        _require_current_resident_device(
+            xp,
+            ("resident_factors", resident_reference),
+            operation=operation,
+        )
+        coefficient = xp.asarray(host_coefficient)
+        uploaded_nbytes = int(host_coefficient.nbytes)
+        record_h2d(
+            uploaded_nbytes,
+            operation="mo_three_index_mo_coefficients",
+        )
+        device_id = _require_current_resident_device(
+            xp,
+            ("resident_factors", resident_reference),
+            ("mo_coeff", coefficient),
+            operation=operation,
+        )
+        source = "host-to-gpu-accounted"
+
+    if coefficient.ndim != 2 or coefficient.shape[0] != nao:
+        raise ValueError("mo_coeff must have shape (nao,nmo)")
+    return coefficient, source, uploaded_nbytes, device_id
+
+
 class MOThreeIndexIntegralProvider:
     """Resident molecular-orbital factors in ``L[Q,p,q]`` layout.
 
@@ -459,6 +559,7 @@ class MOThreeIndexIntegralProvider:
         factorization: str,
         threshold: Optional[float],
         source: str = "external",
+        _ao_to_mo_metadata: Optional[dict] = None,
     ):
         if getattr(factors, "ndim", None) != 3:
             raise ValueError("MO three-index factors must be rank three")
@@ -484,6 +585,30 @@ class MOThreeIndexIntegralProvider:
         self.threshold = None if threshold is None else float(threshold)
         self.source = str(source)
         self.xp = _array_module(factors)
+        _require_current_resident_device(
+            self.xp,
+            ("factors", factors),
+            operation="MO three-index provider construction",
+        )
+        if _ao_to_mo_metadata is None:
+            _ao_to_mo_metadata = {
+                "performed": False,
+                "symmetry_policy": "external-factors-unmodified",
+                "ao_contraction_dimension": None,
+                "block_local_action": None,
+                "requested_auxiliary_block_size": None,
+                "observed_auxiliary_block_sizes": [],
+                "mo_coefficient_source": None,
+                "mo_coefficient_h2d_nbytes": 0,
+                "resident_device_id": None,
+                "current_device_verified": self.xp is not np,
+            }
+        self._ao_to_mo_metadata = {
+            **_ao_to_mo_metadata,
+            "observed_auxiliary_block_sizes": list(
+                _ao_to_mo_metadata.get("observed_auxiliary_block_sizes", [])
+            ),
+        }
 
     @classmethod
     def from_ao_factors(
@@ -497,8 +622,15 @@ class MOThreeIndexIntegralProvider:
         threshold: Optional[float],
         source: str = "ao-three-index",
         auxiliary_block_size: Optional[int] = None,
+        transfer_counter: Any = None,
     ) -> "MOThreeIndexIntegralProvider":
-        """Transform resident AO factors to MO factors in auxiliary blocks."""
+        """Transform resident AO factors to MO factors in auxiliary blocks.
+
+        CuPy AO factors and CuPy MO coefficients must reside on the current
+        device.  Host coefficients may be uploaded only when
+        ``transfer_counter`` is supplied; the exact source byte count is then
+        recorded as ``mo_three_index_mo_coefficients``.
+        """
 
         if getattr(ao_factors, "ndim", None) != 3:
             raise ValueError("AO factors must be rank three")
@@ -509,9 +641,24 @@ class MOThreeIndexIntegralProvider:
         if ao_factors.shape[1] != ao_factors.shape[2]:
             raise ValueError("AO factors must have shape (naux,nao,nao)")
         xp = _array_module(ao_factors)
-        mo_coeff = xp.asarray(mo_coeff)
-        if mo_coeff.ndim != 2 or mo_coeff.shape[0] != ao_factors.shape[1]:
-            raise ValueError("mo_coeff must have shape (nao,nmo)")
+        _require_current_resident_device(
+            xp,
+            ("ao_factors", ao_factors),
+            operation="AO-to-MO three-index transformation",
+        )
+        (
+            mo_coeff,
+            coefficient_source,
+            coefficient_h2d_nbytes,
+            resident_device_id,
+        ) = _prepare_mo_coefficients(
+            mo_coeff,
+            xp,
+            ao_factors,
+            int(ao_factors.shape[1]),
+            transfer_counter=transfer_counter,
+            operation="AO-to-MO three-index transformation",
+        )
         naux = int(ao_factors.shape[0])
         nmo = int(mo_coeff.shape[1])
         block_size = naux if auxiliary_block_size is None else int(
@@ -523,17 +670,42 @@ class MOThreeIndexIntegralProvider:
             (naux, nmo, nmo),
             dtype=xp.result_type(ao_factors.dtype, mo_coeff.dtype),
         )
+        observed_block_sizes = []
         for start in range(0, naux, block_size):
             stop = min(start + block_size, naux)
             # L_Qpq = C_mp^* L_Qmn C_nq, split into two batched GEMMs.
             intermediate = xp.matmul(ao_factors[start:stop], mo_coeff)
-            result[start:stop] = xp.matmul(mo_coeff.T.conj(), intermediate)
+            transformed = xp.matmul(mo_coeff.T.conj(), intermediate)
+            # AO factors represent Hermitian orbital pairs.  Remove the two
+            # GEMM paths' roundoff asymmetry while only this auxiliary block
+            # is live, before publishing it to resident storage.
+            transformed = (
+                transformed + transformed.swapaxes(1, 2).conj()
+            ) * 0.5
+            result[start:stop] = transformed
+            observed_block_sizes.append(stop - start)
         return cls(
             result,
             nocc,
             factorization=factorization,
             threshold=threshold,
             source=source,
+            _ao_to_mo_metadata={
+                "performed": True,
+                "symmetry_policy": "block-local-explicit-hermitization",
+                "ao_contraction_dimension": int(ao_factors.shape[1]),
+                "block_local_action": "(C^H L_AO C + (C^H L_AO C)^H)/2",
+                "requested_auxiliary_block_size": (
+                    None
+                    if auxiliary_block_size is None
+                    else int(auxiliary_block_size)
+                ),
+                "observed_auxiliary_block_sizes": observed_block_sizes,
+                "mo_coefficient_source": coefficient_source,
+                "mo_coefficient_h2d_nbytes": coefficient_h2d_nbytes,
+                "resident_device_id": resident_device_id,
+                "current_device_verified": xp is not np,
+            },
         )
 
     @classmethod
@@ -556,6 +728,10 @@ class MOThreeIndexIntegralProvider:
         The private ``_cderi`` shape is used deliberately because ``DF.naux``
         reports the raw auxiliary size even when metric linear dependence
         reduces the effective factor rank.
+
+        All resident CuPy inputs must share the current device.  Host MO
+        coefficients use the same explicitly accounted upload contract as
+        :meth:`from_ao_factors`.
         """
 
         if getattr(dfobj, "_cderi", None) is None:
@@ -583,6 +759,11 @@ class MOThreeIndexIntegralProvider:
                 "GPU4PySCF stored CDERI on the host; set DF.use_gpu_memory=True "
                 "or reduce the validation case"
             )
+        _require_current_resident_device(
+            storage_xp,
+            ("cderi", cderi_slice),
+            operation="GPU4PySCF DF three-index transformation",
+        )
         effective_naux = int(cderi_slice.shape[0])
         block_size = (
             None if auxiliary_block_size is None else int(auxiliary_block_size)
@@ -593,7 +774,11 @@ class MOThreeIndexIntegralProvider:
         result = None
         coefficient = None
         offset = 0
-        for ao_block, _packed_block in dfobj.loop(
+        observed_block_sizes = []
+        coefficient_source = None
+        coefficient_h2d_nbytes = 0
+        resident_device_id = None
+        for ao_block, packed_block in dfobj.loop(
             blksize=block_size, unpack=True
         ):
             if ao_block is None or getattr(ao_block, "ndim", None) != 3:
@@ -603,27 +788,47 @@ class MOThreeIndexIntegralProvider:
                 raise RuntimeError("DF.loop returned a host AO-factor block")
             if xp is not storage_xp:
                 raise TypeError("DF.loop backend does not match _cderi storage")
+            resident_arrays = [
+                ("cderi", cderi_slice),
+                ("ao_block", ao_block),
+            ]
+            if packed_block is not None:
+                resident_arrays.append(("packed_block", packed_block))
+            if coefficient is not None:
+                resident_arrays.extend(
+                    [("mo_coeff", coefficient), ("result", result)]
+                )
+            _require_current_resident_device(
+                xp,
+                *resident_arrays,
+                operation="GPU4PySCF DF three-index transformation",
+            )
             if coefficient is None:
-                coefficient = mo_coeff
-                if _array_module(coefficient) is not xp:
-                    if xp is not np:
-                        host_coefficient = np.asarray(coefficient)
-                        original_nbytes = int(host_coefficient.nbytes)
-                        if transfer_counter is None:
-                            raise ValueError(
-                                "uploading MO coefficients requires an explicit "
-                                "transfer_counter"
-                            )
-                        coefficient = xp.asarray(host_coefficient)
-                        transfer_counter.record_h2d(original_nbytes)
-                    else:
-                        coefficient = xp.asarray(coefficient)
-                if coefficient.ndim != 2 or coefficient.shape[0] != ao_block.shape[1]:
-                    raise ValueError("mo_coeff must have shape (nao,nmo)")
+                (
+                    coefficient,
+                    coefficient_source,
+                    coefficient_h2d_nbytes,
+                    resident_device_id,
+                ) = _prepare_mo_coefficients(
+                    mo_coeff,
+                    xp,
+                    cderi_slice,
+                    int(ao_block.shape[1]),
+                    transfer_counter=transfer_counter,
+                    operation="GPU4PySCF DF three-index transformation",
+                )
                 nmo = int(coefficient.shape[1])
                 result = xp.empty(
                     (effective_naux, nmo, nmo),
                     dtype=xp.result_type(ao_block.dtype, coefficient.dtype),
+                )
+                _require_current_resident_device(
+                    xp,
+                    ("cderi", cderi_slice),
+                    ("ao_block", ao_block),
+                    ("mo_coeff", coefficient),
+                    ("result", result),
+                    operation="GPU4PySCF DF three-index transformation",
                 )
             elif _array_module(result) is not xp:
                 raise TypeError("DF.loop changed array backend between blocks")
@@ -631,10 +836,13 @@ class MOThreeIndexIntegralProvider:
             if offset + count > effective_naux:
                 raise RuntimeError("DF.loop yielded more factors than _cderi stores")
             intermediate = xp.matmul(ao_block, coefficient)
-            result[offset:offset + count] = xp.matmul(
-                coefficient.T.conj(), intermediate
-            )
+            transformed = xp.matmul(coefficient.T.conj(), intermediate)
+            transformed = (
+                transformed + transformed.swapaxes(1, 2).conj()
+            ) * 0.5
+            result[offset:offset + count] = transformed
             offset += count
+            observed_block_sizes.append(count)
         if result is None or offset != effective_naux:
             raise RuntimeError(
                 "DF.loop factor count does not match the effective _cderi rank"
@@ -645,6 +853,18 @@ class MOThreeIndexIntegralProvider:
             factorization="df",
             threshold=None,
             source=source,
+            _ao_to_mo_metadata={
+                "performed": True,
+                "symmetry_policy": "block-local-explicit-hermitization",
+                "ao_contraction_dimension": int(coefficient.shape[0]),
+                "block_local_action": "(C^H L_AO C + (C^H L_AO C)^H)/2",
+                "requested_auxiliary_block_size": block_size,
+                "observed_auxiliary_block_sizes": observed_block_sizes,
+                "mo_coefficient_source": coefficient_source,
+                "mo_coefficient_h2d_nbytes": coefficient_h2d_nbytes,
+                "resident_device_id": resident_device_id,
+                "current_device_verified": storage_xp is not np,
+            },
         )
 
     @property
@@ -749,6 +969,14 @@ class MOThreeIndexIntegralProvider:
             "nmo": self.nmo,
             "dtype": str(self.dtype),
             "storage_nbytes": self.storage_nbytes,
+            "ao_to_mo_transformation": {
+                **self._ao_to_mo_metadata,
+                "observed_auxiliary_block_sizes": list(
+                    self._ao_to_mo_metadata[
+                        "observed_auxiliary_block_sizes"
+                    ]
+                ),
+            },
         }
 
 

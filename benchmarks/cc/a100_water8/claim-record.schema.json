@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.codex/ccsd-optimization-loop/claim-record.schema.json",
+  "title": "CCSD performance claim record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "claim_id",
+    "evidence_state",
+    "method_class",
+    "acceptance_table",
+    "timing_scope",
+    "same_scientific_input",
+    "same_timing_boundary",
+    "baseline",
+    "candidate",
+    "speedup",
+    "accuracy"
+  ],
+  "properties": {
+    "claim_id": {"type": "string", "minLength": 1},
+    "evidence_state": {
+      "enum": ["source_reported", "local_measured", "derived", "hypothesis"]
+    },
+    "method_class": {
+      "enum": ["equation-preserving", "precision-recovery", "controlled-approximation"]
+    },
+    "acceptance_table": {"enum": ["S", "I", "A", "not_yet_accepted"]},
+    "timing_scope": {
+      "enum": ["single_contraction", "fixed_update", "ccsd_iteration", "post_hf", "full_job"]
+    },
+    "same_scientific_input": {"type": "boolean"},
+    "same_timing_boundary": {"type": "boolean"},
+    "baseline": {"$ref": "#/$defs/run"},
+    "candidate": {"$ref": "#/$defs/run"},
+    "speedup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "formula"],
+      "properties": {
+        "value": {"type": "number", "exclusiveMinimum": 0},
+        "formula": {"type": "string", "minLength": 3}
+      }
+    },
+    "accuracy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_id", "passed", "observables", "same_eri_representation"],
+      "properties": {
+        "contract_id": {"type": "string", "minLength": 1},
+        "passed": {"type": "boolean"},
+        "same_eri_representation": {"type": "boolean"},
+        "cleanup_included_in_candidate_time": {"type": "boolean"},
+        "observables": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "error", "threshold", "unit", "passed"],
+            "properties": {
+              "name": {"type": "string"},
+              "error": {"type": "number", "minimum": 0},
+              "threshold": {"type": "number", "minimum": 0},
+              "unit": {"type": "string"},
+              "passed": {"type": "boolean"}
+            }
+          }
+        }
+      }
+    },
+    "approximation_parameters": {"type": "object"},
+    "limitations": {"type": "array", "items": {"type": "string"}}
+  },
+  "$defs": {
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seconds", "hardware_fingerprint", "software_revision", "raw_record_ids"],
+      "properties": {
+        "seconds": {"type": "number", "minimum": 0},
+        "hardware_fingerprint": {"type": "string", "minLength": 1},
+        "software_revision": {"type": "string", "minLength": 1},
+        "raw_record_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"acceptance_table": {"const": "S"}}},
+      "then": {
+        "properties": {
+          "same_scientific_input": {"const": true},
+          "same_timing_boundary": {"const": true},
+          "accuracy": {
+            "properties": {
+              "passed": {"const": true},
+              "same_eri_representation": {"const": true}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"method_class": {"const": "precision-recovery"}}},
+      "then": {
+        "properties": {
+          "accuracy": {
+            "required": ["cleanup_included_in_candidate_time"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "method_class": {"const": "precision-recovery"},
+          "acceptance_table": {"const": "S"}
+        },
+        "required": ["method_class", "acceptance_table"]
+      },
+      "then": {
+        "properties": {
+          "accuracy": {
+            "properties": {
+              "cleanup_included_in_candidate_time": {"const": true}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"acceptance_table": {"enum": ["I", "A"]}}},
+      "then": {"required": ["approximation_parameters"]}
+    }
+  ]
+}

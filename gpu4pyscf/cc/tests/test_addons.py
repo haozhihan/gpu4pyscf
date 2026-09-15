@@ -75,6 +75,7 @@ def test_cpu_fno_ccsd_is_explicit_and_audited():
     addon = FNOCCSD(mf, nvir_act=1, use_gpu=False)
     cc = addon.build()
     assert cc.__class__.__module__.startswith("pyscf")
+    assert {"fno_metadata", "fno_delta_mp2", "fno_backend"} <= cc._keys
     assert np.isclose(cc.fno_delta_mp2, addon.metadata.delta_mp2)
     result = addon.kernel()
     assert np.isclose(result[0], cc.e_corr)

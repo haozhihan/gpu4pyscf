@@ -49,6 +49,16 @@ def _scalar(value: Any) -> float:
     return float(value.item()) if hasattr(value, "item") else float(value)
 
 
+def _exact_pair_roundoff_bound(
+    dtype: Any, *, pair_dimension: int, rr_rank: int
+) -> float:
+    """Return a dimension-aware FP roundoff bound for the analytic endpoint."""
+
+    real_dtype = np.empty((), dtype=np.dtype(dtype)).real.dtype
+    scale = math.sqrt(max(1, int(pair_dimension), int(rr_rank)))
+    return float(128.0 * np.finfo(real_dtype).eps * scale)
+
+
 def _right_solve(mttkrp: Any, gram: Any, ridge: float, xp: Any):
     regularized = gram + ridge * xp.eye(gram.shape[0], dtype=gram.dtype)
     return xp.linalg.solve(regularized.T, mttkrp.T).T
@@ -114,7 +124,68 @@ class THCProjectorFactors:
         return bool(
             self.thc_rank == self.nocc * self.nvir
             and self.iterations == 0
-            and self.rank_attempts == (self.nocc * self.nvir,)
+            and bool(self.rank_attempts)
+            and self.rank_attempts[-1] == self.nocc * self.nvir
+        )
+
+    @property
+    def exact_pair_endpoint(self) -> bool:
+        """Alias naming the analytic endpoint used by audit consumers."""
+
+        return self.analytic_full_pair_endpoint
+
+    @property
+    def exact_pair_roundoff_bound(self) -> float:
+        """Strict reconstruction bound for the analytic pair endpoint."""
+
+        return _exact_pair_roundoff_bound(
+            self.y_occ.dtype,
+            pair_dimension=self.nocc * self.nvir,
+            rr_rank=self.rr_rank,
+        )
+
+    @property
+    def weighted_fit_gate_limit(self) -> float:
+        """Return the accepted weighted-residual limit for this route."""
+
+        if self.exact_pair_endpoint:
+            return self.exact_pair_roundoff_bound
+        return float(self.fit_tolerance)
+
+    @property
+    def weighted_fit_gate_passed(self) -> bool:
+        """Apply the endpoint-aware weighted-fit contract to recorded data."""
+
+        if self.exact_pair_endpoint:
+            return self.exact_pair_roundoff_gate_passed
+        residual = float(self.weighted_fit_residual)
+        return bool(
+            math.isfinite(residual) and residual <= self.weighted_fit_gate_limit
+        )
+
+    @property
+    def exact_pair_roundoff_error(self) -> float:
+        """Largest reconstruction/orthogonality error at the exact endpoint."""
+
+        diagnostics = (
+            self.als_weighted_fit_residual,
+            self.als_unweighted_fit_residual,
+            self.weighted_fit_residual,
+            self.unweighted_fit_residual,
+            self.orthogonalized_projector_distance,
+            self.orthogonality_error,
+        )
+        if not all(math.isfinite(float(value)) for value in diagnostics):
+            return float("inf")
+        return float(max(abs(float(value)) for value in diagnostics))
+
+    @property
+    def exact_pair_roundoff_gate_passed(self) -> bool:
+        """Require strict roundoff reconstruction at the analytic endpoint."""
+
+        return bool(
+            not self.exact_pair_endpoint
+            or self.exact_pair_roundoff_error <= self.exact_pair_roundoff_bound
         )
 
     @property
@@ -180,6 +251,12 @@ class THCProjectorFactors:
             "borrowed_eigenvalues_nbytes": int(self.eigenvalues.nbytes),
             "rank_attempts": [int(rank) for rank in self.rank_attempts],
             "analytic_full_pair_endpoint": self.analytic_full_pair_endpoint,
+            "exact_pair_endpoint": self.exact_pair_endpoint,
+            "exact_pair_roundoff_bound": self.exact_pair_roundoff_bound,
+            "exact_pair_roundoff_error": self.exact_pair_roundoff_error,
+            "weighted_fit_gate_limit": self.weighted_fit_gate_limit,
+            "weighted_fit_gate_passed": self.weighted_fit_gate_passed,
+            "exact_pair_roundoff_gate_passed": self.exact_pair_roundoff_gate_passed,
         }
 
 
@@ -388,7 +465,29 @@ def fit_weighted_thc_projector(
             weighted_target - orthogonalized * eigenvalues[None, None, :]
         ) / weighted_norm
     )
-    if not allow_unconverged and final_weighted_residual > fit_tolerance:
+    diagnostics = (
+        weighted_residual,
+        als_unweighted_residual,
+        minimum,
+        orthogonality_error,
+        orthogonalized_distance,
+        final_weighted_residual,
+    )
+    if not all(math.isfinite(value) for value in diagnostics):
+        raise FloatingPointError(
+            "THC projector fit produced a non-finite diagnostic"
+        )
+    exact_pair_endpoint = thc_rank == projector.full_dimension
+    exact_roundoff_bound = _exact_pair_roundoff_bound(
+        dtype,
+        pair_dimension=projector.full_dimension,
+        rr_rank=rr_rank,
+    )
+    if (
+        not allow_unconverged
+        and not exact_pair_endpoint
+        and final_weighted_residual > fit_tolerance
+    ):
         raise RuntimeError(
             "orthogonalized THC projector exceeds fit_tolerance: "
             f"{final_weighted_residual:.3e} > {fit_tolerance:.3e}"
@@ -398,7 +497,7 @@ def fit_weighted_thc_projector(
             "orthogonalized THC projector exceeds the orthogonality gate: "
             f"{orthogonality_error:.3e} > {orthogonality_tolerance:.3e}"
         )
-    return THCProjectorFactors(
+    result = THCProjectorFactors(
         y_occ=y_occ,
         y_vir=y_vir,
         tau=tau,
@@ -420,6 +519,13 @@ def fit_weighted_thc_projector(
         host_scalar_reads=host_scalar_reads,
         rank_attempts=(int(thc_rank),),
     )
+    if exact_pair_endpoint and not result.exact_pair_roundoff_gate_passed:
+        raise RuntimeError(
+            "analytic full-pair THC projector exceeds its roundoff bound: "
+            f"{result.exact_pair_roundoff_error:.3e} > "
+            f"{exact_roundoff_bound:.3e}"
+        )
+    return result
 
 
 def fit_weighted_thc_projector_adaptive(
